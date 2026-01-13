@@ -13,12 +13,12 @@ class BoxEstimator(Node):
         super().__init__('box_estimator')
 
         # --- CONFIGURATION ---
-        self.BOX_LENGTH = 0.23   # 23 cm
+        self.BOX_LENGTH = 0.204   # 23 cm
         self.BOX_WIDTH  = 0.20   # 20 cm
         
         self.half_L = self.BOX_LENGTH / 2.0
         self.half_W = self.BOX_WIDTH / 2.0
-        self.APPROACH_DIST = 0.20 
+        self.APPROACH_DIST = 0.08 
 
         # --- GEOMETRY ---
         self.marker_transforms = {}
@@ -35,6 +35,7 @@ class BoxEstimator(Node):
         self.sub = self.create_subscription(ArucoDetection, '/aruco_detections', self.detection_callback, 10)
         self.get_logger().info("Box Estimator Ready [DEBUG MODE]")
 
+
     def setup_box_geometry(self):
         def make_mat_from_vectors(pos, x_vec, y_vec, z_vec):
             mat = np.eye(4)
@@ -44,25 +45,37 @@ class BoxEstimator(Node):
             mat[0:3, 3] = pos
             return mat
 
-        # ID 2: BACK WALL
-        # Marker Z (Blue) points BACKWARDS (Box -X)
+        # ID 2: BACK WALL (FIXED)
+        # We align this to be "Upright" like ID 0.
         self.marker_transforms[2] = make_mat_from_vectors(
             [-self.half_L, 0.0, 0.2], 
-            [0, -1, 0], [0, 0, 1], [-1, 0, 0]
+            [0, -1, 0],  # X (Red) points Box Right (-Y)
+            [0, 0, 1],   # Y (Green) points Box Up (+Z)
+            [-1, 0, 0]   # Z (Blue) points Box Back (-X)
         )
 
-        # ID 0: RIGHT WALL
+        # ID 0: RIGHT WALL (Unchanged, assumed correct)
         self.marker_transforms[0] = make_mat_from_vectors(
             [0.0, -self.half_W, 0.2], 
-            [1, 0, 0], [0, 0, 1], [0, -1, 0]
+            [1, 0, 0], 
+            [0, 0, 1], 
+            [0, -1, 0]
         )
 
-        # ID 1: LEFT WALL
+        # ID 1: LEFT WALL (Unchanged)
         self.marker_transforms[1] = make_mat_from_vectors(
             [0.0, self.half_W, 0.2], 
-            [-1, 0, 0], [0, 0, 1], [0, 1, 0]
+            [-1, 0, 0], 
+            [0, 0, 1], 
+            [0, 1, 0]
         )
 
+        self.marker_transforms[3] = make_mat_from_vectors(
+            [-self.half_L, 0.0, 0.2], 
+            [0, 1, 0],   # X points Left (+Y)
+            [0, 0, 1],   # Y points Up (+Z)
+            [1, 0, 0]    # Z points Front (+X)
+        )
     def detection_callback(self, msg):
         markers = []
         if hasattr(msg, 'markers'): markers = msg.markers
@@ -107,13 +120,22 @@ class BoxEstimator(Node):
             _, _, box_yaw = tft.euler_from_matrix(t_map_box)
 
             # 4. Goal
-            goal_dist = self.half_L + self.APPROACH_DIST
-            goal_x = box_x + goal_dist * math.cos(box_yaw)
-            goal_y = box_y + goal_dist * math.sin(box_yaw)
+            goal_dist = self.APPROACH_DIST
+            goal_x = box_x + goal_dist * math.cos(box_yaw + math.pi)
+            goal_y = box_y + goal_dist * math.sin(box_yaw + math.pi)
             goal_yaw = box_yaw + math.pi
+            yaw_deg = math.degrees(box_yaw)
+            if marker_msg.marker_id == 2:
+                goal_x = box_x + goal_dist * math.cos(box_yaw)
+                goal_y = box_y + goal_dist * math.sin(box_yaw)
+                goal_yaw = box_yaw
+                yaw_deg = math.degrees(box_yaw-math.pi)
+            
+            
+            
 
             # --- DEEP DEBUGGING ---
-            yaw_deg = math.degrees(box_yaw)
+            
             raw_z = marker_msg.pose.position.z
             
             face = "UNKNOWN"
@@ -124,8 +146,8 @@ class BoxEstimator(Node):
                 f"1. Raw Z Dist: {raw_z:.3f} m\n"
                 f"2. Box Center: X={box_x:.3f}, Y={box_y:.3f}\n"
                 f"3. Box Yaw:    {yaw_deg:.1f} deg (Cos: {math.cos(box_yaw):.2f})\n"
-                f"4. Goal Dist:  {goal_dist:.3f} m\n"
-                f"5. Final Goal: X={goal_x:.3f}\n"
+                f"3. Goal Yaw:    {yaw_deg:.1f} deg (Cos: {math.cos(goal_yaw):.2f})\n"
+                f"5. Final Gal: X={goal_x:.3f}, Y={goal_y:.3f}\n"
                 f"-----------------------------"
             )
 

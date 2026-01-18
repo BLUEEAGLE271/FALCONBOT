@@ -31,6 +31,7 @@ setup(
             'rectified_parking = parking.rectified_parking:main',
             'box_estimator = parking.box_estimator:main', # <--- Add this
             'mission_controller = parking.mission_controller:main',
+            'scan_republisher = parking.scan_republisher:main',
         ],
     },
 )

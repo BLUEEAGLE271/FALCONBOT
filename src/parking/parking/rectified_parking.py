@@ -43,6 +43,7 @@ class VPIRectifiedNode(Node):
             coeffs=self.D
         )
 
+        self.output_vpi = vpi.Image(self.DIM, vpi.Format.RGB8)
         # --- 3. ROS SETUP ---
         self.image_pub = self.create_publisher(Image, '/camera/image_rect', 10)
         self.info_pub = self.create_publisher(CameraInfo, '/camera/camera_info', 10)
@@ -71,13 +72,14 @@ class VPIRectifiedNode(Node):
 
         try:
             # 1. Wrap OpenCV frame (BGR) into VPI
-            
+            input_vpi = vpi.asimage(frame, vpi.Format.RGB8)
 
-            with vpi.Backend.CUDA:
+            with vpi.Backend.CUDA: ## CUDA
                 #rectified_bgr = vpi.asimage(frame).convert(vpi.Format.NV12_ER).remap(self.vpi_warp_map, interp=vpi.Interp.LINEAR).convert(vpi.Format.RGB8)
-                rectified_bgr = vpi.asimage(frame).convert(vpi.Format.NV12_ER).remap(self.vpi_warp_map, interp=vpi.Interp.LINEAR).convert(vpi.Format.RGB8)
+                ##vpi.asimage(input_vpi).remap(self.vpi_warp_map, interp=vpi.Interp.LINEAR,out=self.output_vpi)
+                vpi.asimage(frame).remap(self.vpi_warp_map, interp=vpi.Interp.LINEAR, out=self.output_vpi)
             # 5. Download to CPU
-            rect_frame = rectified_bgr.cpu()
+            rect_frame = self.output_vpi.cpu()
 
             # 6. Publish
             now = self.get_clock().now().to_msg()

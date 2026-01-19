@@ -25,16 +25,25 @@ def generate_launch_description():
     # B. TF: Robot Center (base_link) -> LiDAR
     # Offset: x = -0.045 meters (4.5cm behind center)
     # Ensure 'base_laser' matches the frame_id in your ld19 launch file (check RViz if dots don't appear)
+# This node will publish the transform at 10Hz with a CURRENT timestamp
+    # This solves the 0.1Hz bottleneck by satisfying the MessageFilter's time requirement
     lidar_tf = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
-        arguments=['0.045', '0', '0', '1.5708', '0', '0', 'base_link', 'base_laser']
+        name='lidar_tf_publisher',
+        arguments=['--x', '0.045', '--y', '0', '--z', '0', 
+                   '--yaw', '1.5708', '--pitch', '0', '--roll', '0', 
+                   '--frame-id', 'base_link', 
+                   '--child-frame-id', 'base_laser']
     )
-
-    lidar_ghost_tf= Node(
+    lidar_ghost_tf = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
-        arguments=['0.045', '0', '0', '-1.5708', '0', '0', 'base_link', 'base_laser_nav']
+        name='lidar_ghost_tf_publisher',
+        arguments=['--x', '0.045', '--y', '0', '--z', '0', 
+                   '--yaw', '-1.5708', '--pitch', '0', '--roll', '0', 
+                   '--frame-id', 'base_link', 
+                   '--child-frame-id', 'base_laser_nav']
     )
 
     # C. TF: Robot Center (base_link) -> Camera
@@ -43,7 +52,11 @@ def generate_launch_description():
     camera_tf = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
-        arguments=['0.095', '0', '0', '-1.5708', '0', '-1.5708', 'base_link', 'camera_optical_frame']
+        name='camera_tf_publisher',
+        arguments=['--x', '0.095', '--y', '0', '--z', '0', 
+                   '--yaw', '-1.5708', '--pitch', '0', '--roll', '-1.5708', 
+                   '--frame-id', 'base_link', 
+                   '--child-frame-id', 'camera_optical_frame']
     )
 
     
@@ -58,17 +71,14 @@ def generate_launch_description():
 
     # --- 3. NAV2 (Path Planning) ---
     # We delay Nav2 by 5 seconds to ensure SLAM is ready
-    nav2_launch = TimerAction(
-       period=5.0,
-        actions=[
-            IncludeLaunchDescription(
-                PythonLaunchDescriptionSource(os.path.join(nav2_pkg, 'launch', 'navigation_launch.py')),
-                launch_arguments={
-                    'use_sim_time': 'false',
-                    'params_file': os.path.join(my_pkg, 'config', 'my_nav2_params.yaml') # Use your TEB config!
-                }.items()
-            )
-        ]
+    nav2_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(os.path.join(nav2_pkg, 'launch', 'navigation_launch.py')),
+        launch_arguments={
+            'use_sim_time': 'false',
+            'autostart': 'True',   # <--- ADD THIS LINE EXACTLY LIKE THIS
+            'use_composition': 'False',
+            'params_file': os.path.join(my_pkg, 'config', 'my_nav2_params.yaml') # Use your TEB config!
+        }.items()
     )
 
     # --- 4. CUSTOM NODES ---
@@ -113,6 +123,7 @@ def generate_launch_description():
             'init_pose_from_topic': '',
             'freq': 20.0
         }],
+        arguments=['--ros-args', '--log-level', 'FATAL'], # Add this line
     )
 
     return LaunchDescription([
@@ -123,14 +134,16 @@ def generate_launch_description():
         lidar_launch,
         camera_launch,
         scan_republisher_node,
+
+        
         # 2. Wait 3s for Lidar to spin up, then start Odom
-        TimerAction(period=3.0, actions=[rf2o_node]),
+        TimerAction(period=1.0, actions=[rf2o_node]),
 
         # 3. Wait 5s for Odom to stabilize, then start SLAM
-        TimerAction(period=5.0, actions=[slam_launch]),
+        TimerAction(period=3.0, actions=[slam_launch]),
 
         # 4. Wait 10s for Map to build, then start Nav2
-        TimerAction(period=10.0, actions=[nav2_launch]),
+        TimerAction(period=5.0, actions=[nav2_launch]),
 
         # 5. Finally, start your logic
         TimerAction(period=15.0, actions=[

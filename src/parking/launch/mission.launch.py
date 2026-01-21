@@ -36,14 +36,14 @@ def generate_launch_description():
                    '--frame-id', 'base_link', 
                    '--child-frame-id', 'base_laser']
     )
+
     lidar_ghost_tf = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
-        name='lidar_ghost_tf_publisher',
         arguments=['--x', '0.045', '--y', '0', '--z', '0', 
                    '--yaw', '-1.5708', '--pitch', '0', '--roll', '0', 
                    '--frame-id', 'base_link', 
-                   '--child-frame-id', 'base_laser_nav']
+                   '--child-frame-id', 'base_laser']
     )
 
     # C. TF: Robot Center (base_link) -> Camera
@@ -61,12 +61,15 @@ def generate_launch_description():
 
     
     # --- 2. SLAM (Mapping) ---
-    slam_launch = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(os.path.join(slam_pkg, 'launch', 'online_async_launch.py')),
-        launch_arguments={
-            'use_sim_time': 'false',
-            'slam_params_file': os.path.join(my_pkg, 'config', 'my_slam_params.yaml')
-       }.items()
+    slam_node = Node(
+        package='slam_toolbox',
+        executable='async_slam_toolbox_node',
+        name='slam_toolbox',
+        output='screen',
+        parameters=[os.path.join(my_pkg, 'config', 'my_slam_params.yaml'), 
+                   {'use_sim_time': False}],
+        # THE NUCLEAR OPTION: Run with lower priority
+        prefix=['nice -n 10'] 
     )
 
     # --- 3. NAV2 (Path Planning) ---
@@ -81,13 +84,7 @@ def generate_launch_description():
         }.items()
     )
 
-    # --- 4. CUSTOM NODES ---
-    scan_republisher_node = Node(
-        package='parking',
-        executable='scan_republisher', # Ensure this is registered in setup.py!
-        name='scan_republisher',
-        output='screen'
-    )
+    #
 
     explore_node = Node(
         package='frontier_exploration',
@@ -109,27 +106,44 @@ def generate_launch_description():
         executable='mission_controller',
         output='screen'
     )
+
+    scan_republisher_node = Node(
+        package='parking',
+        executable='scan_republisher_cpp', # The C++ executable you built
+        output='screen'
+    )
+
     rf2o_node = Node(
         package='rf2o_laser_odometry',
         executable='rf2o_laser_odometry_node',
         name='rf2o_laser_odometry',
         output='screen',
         parameters=[{
-            'laser_scan_topic': '/scan_nav',   # <--- LISTEN TO THE GHOST TOPIC
-            'odom_topic': '/odom',
-            'publish_tf': True,
+            'laser_scan_topic': '/scan_nav',
+            'odom_topic': '/odom_rf2o',      # <--- RENAME: EKF listens to this
+            'publish_tf': False,             # <--- CRITICAL: Disable TF, EKF handles it now
             'base_frame_id': 'base_link',
             'odom_frame_id': 'odom',
             'init_pose_from_topic': '',
-            'freq': 20.0
+            'freq': 20.0,
+            'use_sim_time': False
         }],
-        arguments=['--ros-args', '--log-level', 'FATAL'], # Add this line
+        arguments=['--ros-args', '--log-level', 'FATAL'],
     )
+
+    robot_localization_node = Node(
+       package='robot_localization',
+       executable='ekf_node',
+       name='ekf_filter_node',
+       output='screen',
+       parameters=[os.path.join(my_pkg, 'config', 'ekf.yaml')],
+       remappings=[('odometry/filtered', '/odom')]
+    )
+
 
     return LaunchDescription([
         # 1. Start Transforms and Sensors immediately
         lidar_tf,
-        lidar_ghost_tf,
         camera_tf,
         lidar_launch,
         camera_launch,
@@ -138,9 +152,10 @@ def generate_launch_description():
         
         # 2. Wait 3s for Lidar to spin up, then start Odom
         TimerAction(period=1.0, actions=[rf2o_node]),
+        TimerAction(period=2.0, actions=[robot_localization_node]),
 
         # 3. Wait 5s for Odom to stabilize, then start SLAM
-        TimerAction(period=3.0, actions=[slam_launch]),
+        TimerAction(period=3.0, actions=[slam_node]),
 
         # 4. Wait 10s for Map to build, then start Nav2
         TimerAction(period=5.0, actions=[nav2_launch]),

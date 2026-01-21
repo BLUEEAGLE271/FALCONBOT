@@ -10,13 +10,15 @@ slam_toolbox:
     mode: mapping # or localization
     debug_logging: false
     throttle_scans: 1
-    transform_publish_period: 0.02 # 50Hz
+    transform_publish_period: 0.05
     map_update_interval: 1.0 # Update map every 1s (saves CPU)
-    resolution: 0.05
+    resolution: 0.1
     max_laser_range: 12.0 # LD19 max range
 
     # --- Coordinate Matcher ---
+    minimum_time_interval: 0.3
     minimum_travel_distance: 0.02
     minimum_travel_heading: 0.1
     transform_timeout: 0.5 # Wait longer for rf2o (Fixes "Failed to compute")
     tf_buffer_duration: 30.0
+    scan_queue_size: 1

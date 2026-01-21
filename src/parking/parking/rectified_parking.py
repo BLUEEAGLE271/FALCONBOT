@@ -7,6 +7,7 @@ import cv2
 import numpy as np
 import vpi
 
+
 class VPIRectifiedNode(Node):
     def __init__(self):
         super().__init__('vpi_rectified_node')
@@ -53,13 +54,13 @@ class VPIRectifiedNode(Node):
         if not self.cap.isOpened():
              self.get_logger().error("Could not open camera!")
 
-        self.timer = self.create_timer(1.0/21.0, self.timer_callback)
+        self.timer = self.create_timer(1.0/15.0, self.timer_callback)
 
     def gstreamer_pipeline(self, sensor_id=0):
         # Capture 8MP -> Hardware Scale to 0.5MP
         return (
             f"nvarguscamerasrc sensor-id={sensor_id} ! "
-            f"video/x-raw(memory:NVMM), width=3280, height=2464, framerate=21/1 ! "
+            f"video/x-raw(memory:NVMM), width=3280, height=2464, framerate=15/1 ! "
             f"nvvidconv ! "
             f"video/x-raw, width={self.DIM[0]}, height={self.DIM[1]}, format=BGRx ! "
             f"videoconvert ! "
@@ -108,6 +109,7 @@ class VPIRectifiedNode(Node):
 def main(args=None):
     rclpy.init(args=args)
     node = VPIRectifiedNode()
+                # Add your node to it
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:

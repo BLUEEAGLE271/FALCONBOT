@@ -162,7 +162,7 @@ local_costmap:
     ros__parameters:
       update_frequency: 5.0
       publish_frequency: 5.0
-      transform_tolerance: 1.2
+      transform_tolerance: 0.5
       global_frame: odom
       robot_base_frame: base_link
       use_sim_time: False
@@ -175,8 +175,8 @@ local_costmap:
       plugins: ["obstacle_layer", "inflation_layer"]
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 3.0
-        inflation_radius: 0.2
+        cost_scaling_factor: 25.0
+        inflation_radius: 0.08
       obstacle_layer:
         plugin: "nav2_costmap_2d::ObstacleLayer"
         observation_sources: scan
@@ -200,7 +200,8 @@ global_costmap:
       global_frame: map
       robot_base_frame: base_link
       use_sim_time: False
-      robot_radius: 0.20
+      ##robot_radius: 0.20
+      footprint: "[[-0.097, -0.084], [-0.097, 0.084], [0.097, 0.084], [0.097, -0.084]]"
       transform_tolerance: 1.2
       resolution: 0.1
       track_unknown_space: true
@@ -228,8 +229,8 @@ global_costmap:
 
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 3.0
-        inflation_radius: 0.55
+        cost_scaling_factor: 25.0
+        inflation_radius: 0.08
 
 
 planner_server:

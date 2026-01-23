@@ -128,6 +128,7 @@ def generate_launch_description():
             'freq': 10.0,
             'use_sim_time': False
         }],
+        remappings=[('/tf', '/tf_garbage')],
         arguments=['--ros-args', '--log-level', 'FATAL']
     )
 
@@ -164,8 +165,8 @@ def generate_launch_description():
         # 5. Finally, start your logic
         TimerAction(period=15.0, actions=[
             box_estimator_node,
-            mission_control_node,
-            explore_node
+            #mission_control_node,
+            #explore_node
         ])
     ])
 

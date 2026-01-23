@@ -26,6 +26,15 @@ private:
     void topic_callback(sensor_msgs::msg::LaserScan::UniquePtr msg)
     {
         // 3. Frame Override
+        const size_t EXPECTED_SIZE = 503; // Based on your logs
+    
+    // Fix the array size to prevent downstream reallocation lag
+        if (msg->ranges.size() != EXPECTED_SIZE) {
+        msg->ranges.resize(EXPECTED_SIZE, std::numeric_limits<float>::quiet_NaN());
+            if (msg->intensities.size() > 0) {
+                msg->intensities.resize(EXPECTED_SIZE, 0.0f);
+            }
+        }
         msg->header.frame_id = "base_laser_nav";
         
         // 4. Array Rotation logic

@@ -43,6 +43,11 @@ class MissionController(Node):
         goal_msg = NavigateToPose.Goal()
         goal_msg.pose = pose_msg.pose
         goal_msg.pose.header.frame_id = 'map'
+        goal_pose = PoseStamped()
+        goal_pose.header.frame_id = "map" # or "odom"
+        goal_pose.header.stamp = self.get_clock().now().to_msg()
+        goal_pose.pose = msg.pose # Assuming msg.pose is the geometry_msgs/Pose
+        goal_msg.pose = goal_pose
         
         self.get_logger().info(f"[{mode_name}] Sending Goal: {pose_msg.pose.position.x:.2f}, {pose_msg.pose.position.y:.2f}")
         

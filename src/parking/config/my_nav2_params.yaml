@@ -162,7 +162,7 @@ local_costmap:
     ros__parameters:
       update_frequency: 5.0
       publish_frequency: 5.0
-      transform_tolerance: 0.7
+      transform_tolerance: 1.2
       global_frame: odom
       robot_base_frame: base_link
       use_sim_time: False
@@ -201,7 +201,7 @@ global_costmap:
       robot_base_frame: base_link
       use_sim_time: False
       robot_radius: 0.20
-      transform_tolerance: 0.7
+      transform_tolerance: 1.2
       resolution: 0.1
       track_unknown_space: true
       plugins: ["static_layer", "obstacle_layer", "inflation_layer"]

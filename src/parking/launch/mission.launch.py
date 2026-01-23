@@ -43,7 +43,7 @@ def generate_launch_description():
         arguments=['--x', '0.045', '--y', '0', '--z', '0', 
                    '--yaw', '-1.5708', '--pitch', '0', '--roll', '0', 
                    '--frame-id', 'base_link', 
-                   '--child-frame-id', 'base_laser']
+                   '--child-frame-id', 'base_laser_nav']
     )
 
     # C. TF: Robot Center (base_link) -> Camera
@@ -125,10 +125,10 @@ def generate_launch_description():
             'base_frame_id': 'base_link',
             'odom_frame_id': 'odom',
             'init_pose_from_topic': '',
-            'freq': 20.0,
+            'freq': 10.0,
             'use_sim_time': False
         }],
-        arguments=['--ros-args', '--log-level', 'FATAL'],
+        arguments=['--ros-args', '--log-level', 'FATAL']
     )
 
     robot_localization_node = Node(
@@ -144,6 +144,7 @@ def generate_launch_description():
     return LaunchDescription([
         # 1. Start Transforms and Sensors immediately
         lidar_tf,
+        lidar_ghost_tf,
         camera_tf,
         lidar_launch,
         camera_launch,

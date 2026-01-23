@@ -27,7 +27,7 @@ private:
     {
         // 3. Frame Override
         msg->header.frame_id = "base_laser_nav";
-
+        
         // 4. Array Rotation logic
         // We want to shift the data by +90 degrees (Quarter of the array)
         // Python equivalent: ranges = ranges[shift:] + ranges[:shift]

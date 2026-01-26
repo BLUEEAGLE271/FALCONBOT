@@ -130,7 +130,6 @@ int main(int argc, char **argv) {
         break;
     }
 
-    r.sleep();
   }
 
   ldlidarnode->Stop();

@@ -92,6 +92,8 @@ void CLaserOdometry2DNode::LaserCallBack(const sensor_msgs::msg::LaserScan::Shar
       // copy laser range data to rf2o internal variable
       for (unsigned int i = 0; i < rf2o_ref.width; i++)
         rf2o_ref.range_wf(i) = new_scan->ranges[i];
+      
+      this->process();
       // inform of new scan available
       new_scan_available = true;
     }
@@ -219,7 +221,7 @@ void CLaserOdometry2DNode::publish()
 
   RCLCPP_DEBUG(get_logger(), "Publishing odom over topic:[%s]", odom_topic.c_str());
 
-  rclcpp::Time current_time = this->now();
+  rclcpp::Time current_time = last_scan.header.stamp;
 
   tf2::Quaternion tf_quaternion;
   tf_quaternion.setRPY(0.0, 0.0, rf2o::getYaw(rf2o_ref.robot_pose_.rotation()));
@@ -305,14 +307,15 @@ int main(int argc, char** argv)
   auto myLaserOdomNode = std::make_shared<rf2o::CLaserOdometry2DNode>();
 
   // set desired loop rate
-  rclcpp::Rate rate(myLaserOdomNode->freq);
-
+  //rclcpp::Rate rate(myLaserOdomNode->freq);
+  rclcpp::spin(myLaserOdomNode);
   // Loop
-  while (rclcpp::ok()){ 
-      rclcpp::spin_some(myLaserOdomNode);
-      myLaserOdomNode->process();
-      rate.sleep();
-  }
+  //while (rclcpp::ok()){ 
+      //rclcpp::spin_some(myLaserOdomNode);
+      //myLaserOdomNode->process();
+      //rate.sleep();
+  //}
+  rclcpp::shutdown();
 
   return 0;
 }

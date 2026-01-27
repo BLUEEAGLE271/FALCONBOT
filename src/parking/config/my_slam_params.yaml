@@ -21,4 +21,4 @@ slam_toolbox:
     minimum_travel_heading: 0.1
     transform_timeout: 0.5 # Wait longer for rf2o (Fixes "Failed to compute")
     tf_buffer_duration: 30.0
-    scan_queue_size: 1
+    scan_queue_size: 10

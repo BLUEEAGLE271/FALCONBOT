@@ -162,7 +162,8 @@ local_costmap:
     ros__parameters:
       update_frequency: 5.0
       publish_frequency: 5.0
-      transform_tolerance: 0.5
+      transform_tolerance: 0.8
+      always_send_full_costmap: True
       global_frame: odom
       robot_base_frame: base_link
       use_sim_time: False
@@ -200,6 +201,7 @@ global_costmap:
       global_frame: map
       robot_base_frame: base_link
       use_sim_time: False
+      always_send_full_costmap: False
       ##robot_radius: 0.20
       footprint: "[[-0.097, -0.084], [-0.097, 0.084], [0.097, 0.084], [0.097, -0.084]]"
       transform_tolerance: 1.2

@@ -21,6 +21,8 @@
 
 #include "ros2_api.h"
 #include "ldlidar_driver.h"
+#include <thread>
+#include <chrono>
 
 void  ToLaserscanMessagePublish(ldlidar::Points2D& src, double lidar_spin_freq, LaserScanSetting& setting,
   rclcpp::Node::SharedPtr& node, rclcpp::Publisher<sensor_msgs::msg::LaserScan>::SharedPtr& lidarpub);
@@ -125,6 +127,7 @@ int main(int argc, char **argv) {
         RCLCPP_ERROR(node->get_logger(), "get ldlidar data is time out, please check your lidar device.");
         break;
       case ldlidar::LidarStatus::DATA_WAIT:
+        std::this_thread::sleep_for(std::chrono::microseconds(100));
         break;
       default:
         break;
@@ -164,7 +167,7 @@ void  ToLaserscanMessagePublish(ldlidar::Points2D& src,  double lidar_spin_freq,
   angle_max = (2 * M_PI);
   range_min = 0.02;
   range_max = 25;
-  int beam_size = static_cast<int>(src.size());
+  int beam_size = 502;
 
   if (beam_size > 1) {
       angle_increment = (angle_max - angle_min) / (float)(beam_size -1);

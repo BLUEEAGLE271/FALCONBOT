@@ -25,7 +25,7 @@ def generate_launch_description():
                 'marker_dict': '6X6_50',
                 'marker_size': 0.094,
                 # Override for the one distinct marker (Example: ID 3 is 10cm)
-                'marker_id_to_size': ["0:0.094", "1:0.094", "2:0.094", "3:0.037"], 
+                'marker_id_to_size': ["0:0.094", "1:0.094", "2:0.094", "3:0.0378"], 
             }]
         )
     ])

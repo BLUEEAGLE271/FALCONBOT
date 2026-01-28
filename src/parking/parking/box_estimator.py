@@ -9,6 +9,7 @@ from tf2_ros import Buffer, TransformListener
 import tf_transformations as tft
 import numpy as np
 import math
+from collections import deque # Added for the filter buffer
 
 class BoxEstimator(Node):
     def __init__(self):
@@ -19,7 +20,7 @@ class BoxEstimator(Node):
         self.BOX_WIDTH  = 0.20   
         self.half_L = self.BOX_LENGTH / 2.0
         self.half_W = self.BOX_WIDTH / 2.0
-        self.APPROACH_DIST = 0.50 # Increased slightly for safety during testing
+        self.APPROACH_DIST = 0.10 # Increased slightly for safety during testing
 
         # --- STATE ---
         self.navigation_started = False # <--- Flag to track if we kicked off Nav2
@@ -27,6 +28,10 @@ class BoxEstimator(Node):
         # --- GEOMETRY ---
         self.marker_transforms = {}
         self.setup_box_geometry()
+
+        # --- FILTERING ---
+        self.filter_size = 5 
+        self.pose_history = {} # Stores deques of (x, y, yaw)
 
         # --- ROS SETUP ---
         # 1. Action Client to START the behavior tree
@@ -56,7 +61,10 @@ class BoxEstimator(Node):
             return mat
 
         self.marker_transforms[2] = make_mat_from_vectors(
-            [-self.half_L, 0.0, 0.2], [0, -1, 0], [0, 0, 1], [-1, 0, 0]
+            [self.half_L, 0.0, 0.2],  # Position
+            [0, 1, 0],                 # X Vector (Flipped)
+            [0, 0, 1],                 # Y Vector (Same Z)
+            [1, 0, 0]                  # Z Vector (Flipped)
         )
         self.marker_transforms[0] = make_mat_from_vectors(
             [0.0, -self.half_W, 0.2], [1, 0, 0], [0, 0, 1], [0, -1, 0]
@@ -64,8 +72,12 @@ class BoxEstimator(Node):
         self.marker_transforms[1] = make_mat_from_vectors(
             [0.0, self.half_W, 0.2], [-1, 0, 0], [0, 0, 1], [0, 1, 0]
         )
+
         self.marker_transforms[3] = make_mat_from_vectors(
-            [-self.half_L, 0.0, 0.2], [0, 1, 0], [0, 0, 1], [1, 0, 0]
+            [-self.half_L, 0.0, 0.2], # Position on the front face
+            [0, -1, 0],               # X points "Left" from the box perspective
+            [0, 0, 1],                # Y points "Up"
+            [-1, 0, 0]                # Z points "Forward" (Out of the box)
         )
 
     def detection_callback(self, msg):
@@ -93,7 +105,14 @@ class BoxEstimator(Node):
                 tft.quaternion_matrix([p.orientation.x, p.orientation.y, p.orientation.z, p.orientation.w])
             )
 
-            tf_stamped = self.tf_buffer.lookup_transform('map', 'camera_optical_frame', rclpy.time.Time())
+            #tf_stamped = self.tf_buffer.lookup_transform('map', 'camera_optical_frame', rclpy.time.Time())
+            try:
+                tf_stamped = self.tf_buffer.lookup_transform(
+                    'map', 'camera_optical_frame', rclpy.time.Time()
+                )
+            except (LookupException, ConnectivityException, ExtrapolationException):
+                # If TF is not ready, just skip this frame silently
+                return
             t = tf_stamped.transform.translation
             r = tf_stamped.transform.rotation
             t_map_cam = tft.concatenate_matrices(
@@ -105,23 +124,43 @@ class BoxEstimator(Node):
             t_marker_box = tft.inverse_matrix(t_box_marker)
             t_map_box = tft.concatenate_matrices(t_map_cam, t_cam_marker, t_marker_box)
 
-            box_x = t_map_box[0, 3]
-            box_y = t_map_box[1, 3]
-            _, _, box_yaw = tft.euler_from_matrix(t_map_box)
+            rot_180 = tft.euler_matrix(0, 0, math.pi)
+            t_map_box = tft.concatenate_matrices(t_map_box, rot_180)
+
+            curr_x = t_map_box[0, 3]
+            curr_y = t_map_box[1, 3]
+            _, _, curr_yaw = tft.euler_from_matrix(t_map_box)
 
             # 4. Goal Calculation
-            goal_dist = self.APPROACH_DIST
+            m_id = marker_msg.marker_id
+
+            if m_id == 3:
+                current_filter_size = 15 # Much heavier smoothing for the small marker
+
             
-            # Default logic
-            goal_x = box_x + goal_dist * math.cos(box_yaw + math.pi)
-            goal_y = box_y + goal_dist * math.sin(box_yaw + math.pi)
-            goal_yaw = box_yaw + math.pi
+            if m_id not in self.pose_history:
+                self.pose_history[m_id] = deque(maxlen=self.filter_size)
+            
+            self.pose_history[m_id].append((curr_x, curr_y, curr_yaw))
+
+            # Average the values in the buffer
+            avg_x = sum(p[0] for p in self.pose_history[m_id]) / len(self.pose_history[m_id])
+            avg_y = sum(p[1] for p in self.pose_history[m_id]) / len(self.pose_history[m_id])
+            
+            # Yaw averaging requires care for wrap-around, but for small jitter, direct avg works:
+            avg_yaw = sum(p[2] for p in self.pose_history[m_id]) / len(self.pose_history[m_id])
+
+            # 4. Goal Calculation using Filtered values
+            goal_x = avg_x + self.APPROACH_DIST * math.cos(avg_yaw)
+            goal_y = avg_y + self.APPROACH_DIST * math.sin(avg_yaw)
+            goal_yaw = avg_yaw + math.pi
+            goal_dist = self.APPROACH_DIST
 
             # Back wall fix
-            if marker_msg.marker_id == 2:
-                goal_x = box_x + goal_dist * math.cos(box_yaw)
-                goal_y = box_y + goal_dist * math.sin(box_yaw)
-                goal_yaw = box_yaw
+           # if marker_msg.marker_id == 2:
+            #    goal_x = curr_x + goal_dist * math.cos(curr_yaw)
+             #   goal_y = curr_y + goal_dist * math.sin(curr_yaw)
+              #  goal_yaw = curr_yaw
 
             # --- EXECUTION ---
             # Instead of just publishing to a topic, we now choose between
@@ -129,7 +168,8 @@ class BoxEstimator(Node):
             self.execute_dynamic_goal(goal_x, goal_y, goal_yaw)
 
             # Debug Pub
-            self.publish_debug_pose(box_x, box_y, box_yaw, self.box_pub)
+            ##self.publish_debug_pose(curr_x, curr_y, curr_yaw, self.box_pub)
+            self.publish_debug_pose(avg_x, avg_y, avg_yaw, self.box_pub)
 
         except Exception as e:
             self.get_logger().warn(f"Error: {e}")

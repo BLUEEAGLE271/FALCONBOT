@@ -203,18 +203,21 @@ global_costmap:
       robot_base_frame: base_link
       use_sim_time: False
       always_send_full_costmap: False
+      rolling_window: true
+      width: 4
+      height: 4
       ##robot_radius: 0.20
       footprint: "[[-0.097, -0.084], [-0.097, 0.084], [0.097, 0.084], [0.097, -0.084]]"
       transform_tolerance: 1.2
-      resolution: 0.1
+      resolution: 0.05
       track_unknown_space: true
       plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
       obstacle_layer:
         plugin: "nav2_costmap_2d::ObstacleLayer"
-        enabled: False
+        enabled: True
         observation_sources: scan
         scan:
-          topic: /scan
+          topic: /scan_masked
           max_obstacle_height: 2.0
           clearing: True
           marking: True
@@ -232,7 +235,7 @@ global_costmap:
 
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 25.0
+        cost_scaling_factor: 15.0
         inflation_radius: 0.08
 
 
@@ -245,14 +248,14 @@ planner_server:
       plugin: "nav2_smac_planner/SmacPlannerHybrid"  # <--- The "Car-Like" Planner
       downsample_costmap: false
       downsampling_factor: 1
-      tolerance: 0.25
+      tolerance: 0.03
       allow_unknown: true
       max_iterations: 1000000
       max_on_approach_iterations: 1000
       max_planning_time: 2.0
       motion_model_for_search: "DUBIN" # <--- "DUBIN" = Forward Only (No Reversing)
       angle_quantization_ns: 72
-      minimum_turning_radius: 0.30     # <--- MUST match your controller's radius
+      minimum_turning_radius: 0.40     # <--- MUST match your controller's radius
       reverse_penalty: 1000.0
       change_penalty: 0.0
       non_straight_penalty: 1.2

@@ -1,0 +1,14 @@
+scan_filter_chain:
+  ros__parameters:
+    filter1:
+      name: box_filter
+      type: laser_filters/LaserScanBoxFilter
+      params:
+        box_frame: map  # Use 'map' so the box stays fixed at the parking spot
+        min_x: 5.0      # Example coordinates of your container
+        max_x: 5.5
+        min_y: 2.0
+        max_y: 2.2
+        min_z: -0.1
+        max_z: 2.0
+        invert: true    # Remove points INSIDE the box

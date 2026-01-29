@@ -5,7 +5,7 @@ from rclpy.action import ActionClient # <--- ADDED
 from nav2_msgs.action import NavigateToPose # <--- ADDED
 from geometry_msgs.msg import PoseStamped
 from aruco_opencv_msgs.msg import ArucoDetection
-from tf2_ros import Buffer, TransformListener
+from tf2_ros import Buffer, TransformListener, LookupException, ConnectivityException, ExtrapolationException
 import tf_transformations as tft
 import numpy as np
 import math
@@ -39,7 +39,7 @@ class BoxEstimator(Node):
         
         # 2. Publisher to UPDATE the goal live (The "Dynamic" part)
         self.update_pub = self.create_publisher(PoseStamped, '/goal_update', 10)
-        
+        self.mask_pub = self.create_publisher(PoseStamped, '/parking_goal', 10)
         # Debug publishers
         self.box_pub = self.create_publisher(PoseStamped, '/box_center_pose', 10)
         self.raw_pub = self.create_publisher(PoseStamped, '/raw_marker_pose', 10)
@@ -150,6 +150,21 @@ class BoxEstimator(Node):
             # Yaw averaging requires care for wrap-around, but for small jitter, direct avg works:
             avg_yaw = sum(p[2] for p in self.pose_history[m_id]) / len(self.pose_history[m_id])
 
+            mask_msg = PoseStamped()
+            mask_msg.header.stamp = self.get_clock().now().to_msg()
+            mask_msg.header.frame_id = "map"
+            mask_msg.pose.position.x = avg_x  # <--- Use Box Center
+            mask_msg.pose.position.y = avg_y  # <--- Use Box Center
+
+            q = tft.quaternion_from_euler(0, 0, avg_yaw)
+            mask_msg.pose.orientation.x = q[0]
+            mask_msg.pose.orientation.y = q[1]
+            mask_msg.pose.orientation.z = q[2]
+            mask_msg.pose.orientation.w = q[3]
+
+            self.mask_pub.publish(mask_msg)
+
+
             # 4. Goal Calculation using Filtered values
             goal_x = avg_x + self.APPROACH_DIST * math.cos(avg_yaw)
             goal_y = avg_y + self.APPROACH_DIST * math.sin(avg_yaw)
@@ -162,6 +177,8 @@ class BoxEstimator(Node):
              #   goal_y = curr_y + goal_dist * math.sin(curr_yaw)
               #  goal_yaw = curr_yaw
 
+
+            
             # --- EXECUTION ---
             # Instead of just publishing to a topic, we now choose between
             # STARTING the mission or UPDATING the mission.
@@ -192,6 +209,8 @@ class BoxEstimator(Node):
         goal_msg.pose.orientation.y = msg_q[1]
         goal_msg.pose.orientation.z = msg_q[2]
         goal_msg.pose.orientation.w = msg_q[3]
+
+        
 
         if not self.navigation_started:
             # --- PHASE 1: KICKOFF ---

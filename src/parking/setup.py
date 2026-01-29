@@ -1,7 +1,7 @@
 from setuptools import find_packages, setup
 import os
 from glob import glob
-from setuptools import setup
+
 package_name = 'parking'
 
 setup(
@@ -19,17 +19,15 @@ setup(
     zip_safe=True,
     maintainer='blueeagle',
     maintainer_email='blueeagle@todo.todo',
-    description='TODO: Package description',
+    description='Parking and Odometry Logic',
     license='TODO: License declaration',
-    extras_require={
-        'test': [
-            'pytest',
-        ],
-    },
+    tests_require=['pytest'],
+    # NOTE: In ament_cmake, these entry points are not automatically generated.
+    # The CMakeLists 'install(PROGRAMS...)' handles the executables.
     entry_points={
         'console_scripts': [
             'rectified_parking = parking.rectified_parking:main',
-            'box_estimator = parking.box_estimator:main', # <--- Add this
+            'box_estimator = parking.box_estimator:main',
             'mission_controller = parking.mission_controller:main'
         ],
     },

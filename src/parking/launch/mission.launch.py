@@ -161,11 +161,21 @@ def generate_launch_description():
 
 
                 'marker_dict': '6X6_50',
-                'marker_size': 0.094,
+                'marker_size': 0.0378,
                 # Override for the one distinct marker (Example: ID 3 is 10cm)
                 'marker_id_to_size': ["0:0.094", "1:0.094", "2:0.094", "3:0.0378"], 
             }]
         )
+    goal_masking_node = Node(
+        package='parking',
+        executable='goal_masking_node',
+        name='goal_masking_node',
+        output='screen',
+        remappings=[
+            # Remap the default listener to the topic coming from BoxEstimator
+            ('/goal_pose', '/parking_goal') 
+        ]
+    )
 
 
     return LaunchDescription([
@@ -177,6 +187,7 @@ def generate_launch_description():
         camera_launch,
         aruco_node,
         scan_republisher_node,
+        goal_masking_node,
 
         
         # 2. Wait 3s for Lidar to spin up, then start Odom
@@ -193,6 +204,7 @@ def generate_launch_description():
         # 5. Finally, start your logic
         TimerAction(period=15.0, actions=[
             box_estimator_node,
+            
             #mission_control_node,
             #explore_node
         ])

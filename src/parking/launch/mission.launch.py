@@ -31,7 +31,7 @@ def generate_launch_description():
         package='tf2_ros',
         executable='static_transform_publisher',
         name='lidar_tf_publisher',
-        arguments=['--x', '0.045', '--y', '0', '--z', '0', 
+        arguments=['--x', '0.08', '--y', '0', '--z', '0', 
                    '--yaw', '1.5708', '--pitch', '0', '--roll', '0', 
                    '--frame-id', 'base_link', 
                    '--child-frame-id', 'base_laser']
@@ -40,7 +40,7 @@ def generate_launch_description():
     lidar_ghost_tf = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
-        arguments=['--x', '0.045', '--y', '0', '--z', '0', 
+        arguments=['--x', '0.08', '--y', '0', '--z', '0', 
                    '--yaw', '-1.5708', '--pitch', '0', '--roll', '0', 
                    '--frame-id', 'base_link', 
                    '--child-frame-id', 'base_laser_nav']
@@ -53,7 +53,7 @@ def generate_launch_description():
         package='tf2_ros',
         executable='static_transform_publisher',
         name='camera_tf_publisher',
-        arguments=['--x', '0.095', '--y', '0', '--z', '0', 
+        arguments=['--x', '0.126', '--y', '0', '--z', '0', 
                    '--yaw', '-1.5708', '--pitch', '0', '--roll', '-1.5708', 
                    '--frame-id', 'base_link', 
                    '--child-frame-id', 'camera_optical_frame']
@@ -142,30 +142,18 @@ def generate_launch_description():
     )
 
     aruco_node = Node(
-            package='aruco_opencv',
-            executable='aruco_tracker_autostart',
-            name='aruco_tracker',
-            output='screen',
-            parameters=[{
-                # --- 1. TOPIC CONFIGURATION ---
-                # We listen to the clean, rectified images from your camera node
-                'cam_base_topic': '/camera/image_rect',
-                'image_topic': '/camera/image_rect',
-                'camera_info_topic': '/camera/camera_info',
-                'image_is_rectified': True,
-                # --- 2. FRAME CONFIGURATION ---
-                # Must match 'self.frame_id' in your python script
-                'camera_frame': 'camera_optical_frame',
-                'marker_frame_prefix': 'marker',
-                'publish_tf': True,
-
-
-                'marker_dict': '6X6_50',
-                'marker_size': 0.0378,
-                # Override for the one distinct marker (Example: ID 3 is 10cm)
-                'marker_id_to_size': ["0:0.094", "1:0.094", "2:0.094", "3:0.0378"], 
-            }]
-        )
+        package='parking',           # Your package
+        executable='robust_aruco',   # Your new C++ executable
+        name='robust_aruco',
+        output='screen',
+        parameters=[{
+            'marker_size': 0.094,    # 9.4 cm
+            'target_id': 1,          # Wall marker ID
+            'camera_frame': 'camera_optical_frame',
+            'marker_frame': 'marker_1',
+            'filter_alpha': 0.3      # Smoothing factor
+        }]
+    )
     goal_masking_node = Node(
         package='parking',
         executable='goal_masking_node',
@@ -199,7 +187,7 @@ def generate_launch_description():
         TimerAction(period=3.0, actions=[slam_node]),
 
         # 4. Wait 10s for Map to build, then start Nav2
-        TimerAction(period=5.0, actions=[nav2_launch]),
+        #TimerAction(period=5.0, actions=[nav2_launch]),
 
         # 5. Finally, start your logic
         TimerAction(period=15.0, actions=[

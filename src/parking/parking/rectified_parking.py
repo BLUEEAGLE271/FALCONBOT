@@ -46,8 +46,8 @@ class VPIRectifiedNode(Node):
 
         self.output_vpi = vpi.Image(self.DIM, vpi.Format.RGB8)
         # --- 3. ROS SETUP ---
-        self.image_pub = self.create_publisher(Image, '/camera/image_rect', 10)
-        self.info_pub = self.create_publisher(CameraInfo, '/camera/camera_info', 10)
+        self.image_pub = self.create_publisher(Image, '/camera/image_rect', 20)
+        self.info_pub = self.create_publisher(CameraInfo, '/camera/camera_info', 20)
 
         # Start Camera
         self.cap = cv2.VideoCapture(self.gstreamer_pipeline(), cv2.CAP_GSTREAMER)

@@ -108,7 +108,7 @@ controller_server:
       
       # 2. DEFINE THE GEOMETRY (The "Cheat" Prevention)
       # This is the strict physical constraint you asked for.
-      min_turning_r: 0.3         # The robot CANNOT turn tighter than this (0.5m radius)
+      min_turning_r: 0.2         # The robot CANNOT turn tighter than this (0.5m radius)
       
       # 3. SPEEDS (Mouse Mode)
       vx_max: 1.0
@@ -211,7 +211,7 @@ global_costmap:
       transform_tolerance: 1.2
       resolution: 0.05
       track_unknown_space: true
-      plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
+      plugins: ["obstacle_layer", "inflation_layer"]
       obstacle_layer:
         plugin: "nav2_costmap_2d::ObstacleLayer"
         enabled: True
@@ -225,13 +225,13 @@ global_costmap:
           raytrace_max_range: 3.0
           obstacle_max_range: 2.5
           inf_is_valid: true
-      static_layer:
-        plugin: "nav2_costmap_2d::StaticLayer"
-        map_subscribe_transient_local: True
-        map_topic: "/map"
-        subscribe_to_updates: true
-        map_republish_at_specific_frequency: false
-        track_unknown_space: true        
+      #static_layer:
+        #plugin: "nav2_costmap_2d::StaticLayer"
+        #map_subscribe_transient_local: True
+        #map_topic: "/map"
+        #subscribe_to_updates: true
+        #map_republish_at_specific_frequency: false
+        #track_unknown_space: true        
 
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
@@ -254,12 +254,17 @@ planner_server:
       max_on_approach_iterations: 1000
       max_planning_time: 2.0
       motion_model_for_search: "DUBIN" # <--- "DUBIN" = Forward Only (No Reversing)
+      non_straight_penalty: 2.0        # (Was 1.2) Punish turning
+      cost_travel_multiplier: 5.0      # (Was 2.0) Punish long paths (loops are long)
+      change_penalty: 0.5              # Punish changing from straight to turn
+      analytic_expansion_ratio: 5.0 
+      analytic_expansion_max_length: 3.0
       angle_quantization_ns: 72
-      minimum_turning_radius: 0.40     # <--- MUST match your controller's radius
+      minimum_turning_radius: 0.20     # <--- MUST match your controller's radius
       reverse_penalty: 1000.0
-      change_penalty: 0.0
-      non_straight_penalty: 1.2
-      cost_travel_multiplier: 2.0
+      
+      
+      
 
 behavior_server:
   ros__parameters:

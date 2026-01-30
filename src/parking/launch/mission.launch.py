@@ -4,7 +4,10 @@ from launch import LaunchDescription
 from launch.actions import IncludeLaunchDescription, TimerAction
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.actions import Node
-
+##Bash commands
+##colcon build --symlink-install   --allow-overriding cv_bridge image_geometry --parallel-workers 2
+##source install/setup.bash
+##ros2 launch parking mission.launch.py
 def generate_launch_description():
     # --- PATHS ---
     lidar_pkg = get_package_share_directory('ldlidar_stl_ros2')
@@ -176,24 +179,25 @@ def generate_launch_description():
         aruco_node,
         scan_republisher_node,
         goal_masking_node,
+        box_estimator_node,
 
         
         # 2. Wait 3s for Lidar to spin up, then start Odom
-        TimerAction(period=1.0, actions=[rf2o_node]),
+        TimerAction(period=2.0, actions=[rf2o_node]),
         
-        TimerAction(period=2.0, actions=[robot_localization_node]),
+        TimerAction(period=4.0, actions=[robot_localization_node]),
 
         # 3. Wait 5s for Odom to stabilize, then start SLAM
-        TimerAction(period=3.0, actions=[slam_node]),
+        TimerAction(period=6.0, actions=[slam_node]),
 
         # 4. Wait 10s for Map to build, then start Nav2
-        #TimerAction(period=5.0, actions=[nav2_launch]),
+        TimerAction(period=8.0, actions=[nav2_launch]),
 
         # 5. Finally, start your logic
         TimerAction(period=15.0, actions=[
-            box_estimator_node,
             
-            #mission_control_node,
+            
+            mission_control_node,
             #explore_node
         ])
     ])

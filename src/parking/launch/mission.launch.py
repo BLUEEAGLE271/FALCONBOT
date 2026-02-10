@@ -185,13 +185,13 @@ def generate_launch_description():
         # 2. Wait 3s for Lidar to spin up, then start Odom
         TimerAction(period=2.0, actions=[rf2o_node]),
         
-        TimerAction(period=4.0, actions=[robot_localization_node]),
+        #TimerAction(period=4.0, actions=[robot_localization_node]),
 
         # 3. Wait 5s for Odom to stabilize, then start SLAM
-        TimerAction(period=6.0, actions=[slam_node]),
+       # TimerAction(period=6.0, actions=[slam_node]),
 
         # 4. Wait 10s for Map to build, then start Nav2
-        TimerAction(period=8.0, actions=[nav2_launch]),
+        #TimerAction(period=8.0, actions=[nav2_launch]),
 
         # 5. Finally, start your logic
         TimerAction(period=15.0, actions=[

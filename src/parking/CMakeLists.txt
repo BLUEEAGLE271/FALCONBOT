@@ -10,6 +10,7 @@ if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
 
+find_package(nav_msgs REQUIRED)
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
@@ -23,6 +24,13 @@ find_package(OpenCV REQUIRED COMPONENTS core highgui imgproc objdetect calib3d) 
 
 # Crucial: Find the Python cmake helper
 find_package(ament_cmake_python REQUIRED)
+
+# =========================================================
+# 2.1. Build the C++ Node (Velocity Controller)
+# =========================================================
+add_executable(lidar_velocity_controller src/lidar_velocity_controller.cpp)
+ament_target_dependencies(lidar_velocity_controller rclcpp geometry_msgs nav_msgs)
+install(TARGETS lidar_velocity_controller DESTINATION lib/${PROJECT_NAME})
 
 # =========================================================
 # 2. Build the C++ Node (High Performance Scan Rotator)

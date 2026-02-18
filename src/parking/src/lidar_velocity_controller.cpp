@@ -3,14 +3,16 @@
 #include <string>
 #include <vector>
 #include <cmath>
-#include <fcntl.h>  // File control definitions
-#include <termios.h> // POSIX terminal control definitions
-#include <unistd.h>  // UNIX standard definitions
+#include <fcntl.h>  
+#include <termios.h> 
+#include <unistd.h>  
 #include <iostream>
+#include <sstream> // For parsing
 
 #include "rclcpp/rclcpp.hpp"
 #include "geometry_msgs/msg/twist.hpp"
 #include "nav_msgs/msg/odometry.hpp"
+#include "sensor_msgs/msg/imu.hpp" // NEW: Required for IMU
 
 using namespace std::chrono_literals;
 using std::placeholders::_1;
@@ -44,10 +46,18 @@ public:
         odom_sub_ = this->create_subscription<nav_msgs::msg::Odometry>(
             "odom_rf2o", 10, std::bind(&LidarVelocityController::odom_callback, this, _1));
 
-        // --- TIMER (20Hz Control Loop) ---
-        timer_ = this->create_wall_timer(
+        // --- NEW: IMU PUBLISHER ---
+        imu_pub_ = this->create_publisher<sensor_msgs::msg::Imu>("/imu/data", 10);
+
+        // --- TIMERS ---
+        // Timer 1: Control Loop (Write Commands) - 20Hz
+        control_timer_ = this->create_wall_timer(
             50ms, std::bind(&LidarVelocityController::control_loop, this));
             
+        // Timer 2: Serial Read Loop (Read IMU) - 100Hz (Fast reading)
+        read_timer_ = this->create_wall_timer(
+            10ms, std::bind(&LidarVelocityController::read_serial_loop, this));
+
         last_time_ = this->now();
     }
 
@@ -65,13 +75,18 @@ private:
     double max_speed_;
     double kp_, ki_;
     rclcpp::Time last_time_;
+    
+    // Buffer for storing incoming serial bytes until we find a newline
+    std::string serial_buffer_ = ""; 
 
     // --- ROS HANDLES ---
     rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_sub_;
     rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
-    rclcpp::TimerBase::SharedPtr timer_;
+    rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr imu_pub_;
+    rclcpp::TimerBase::SharedPtr control_timer_;
+    rclcpp::TimerBase::SharedPtr read_timer_;
 
-    // --- SERIAL HELPER ---
+    // --- SERIAL SETUP ---
     bool setupSerial(const std::string &port) {
         serial_fd_ = open(port.c_str(), O_RDWR | O_NOCTTY | O_NDELAY);
         if (serial_fd_ == -1) return false;
@@ -86,10 +101,8 @@ private:
         options.c_cflag &= ~PARENB;          
         options.c_cflag &= ~CSTOPB;          
         options.c_cflag &= ~CRTSCTS;         
-        
         options.c_lflag &= ~(ICANON | ECHO | ECHOE | ISIG); 
         options.c_oflag &= ~OPOST;
-
         tcsetattr(serial_fd_, TCSANOW, &options);
         return true;
     }
@@ -103,6 +116,74 @@ private:
         current_linear_ = msg->twist.twist.linear.x;
     }
 
+    // --- NEW: PARSE JSON MANUALLY ---
+    // Example: {"T":2,"ax":0.123,"gz":0.005}
+    void parse_and_publish_imu(std::string line) {
+        // Simple manual parsing to avoid heavy libraries
+        size_t type_pos = line.find("\"T\":2");
+        if (type_pos == std::string::npos) return; // Not an IMU message
+
+        try {
+            // Find "ax":
+            size_t ax_pos = line.find("\"ax\":");
+            size_t gz_pos = line.find("\"gz\":");
+            size_t end_pos = line.find("}");
+
+            if (ax_pos != std::string::npos && gz_pos != std::string::npos) {
+                // Extract numbers
+                std::string ax_str = line.substr(ax_pos + 5, gz_pos - (ax_pos + 5) - 1); // between "ax": and ,
+                std::string gz_str = line.substr(gz_pos + 5, end_pos - (gz_pos + 5));   // between "gz": and }
+
+                double ax = std::stod(ax_str);
+                double gz = std::stod(gz_str);
+
+                // Publish to ROS
+                auto imu_msg = sensor_msgs::msg::Imu();
+                imu_msg.header.stamp = this->now();
+                imu_msg.header.frame_id = "base_link"; // IMU frame
+
+                // EKF needs ax (Linear Accel)
+                imu_msg.linear_acceleration.x = ax;
+                
+                // EKF needs gz (Angular Vel)
+                imu_msg.angular_velocity.z = gz;
+
+                // Set covariances (Signals EKF to trust these values but ignore others)
+                imu_msg.orientation_covariance[0] = -1; // No orientation (use rf2o)
+                imu_msg.linear_acceleration_covariance[0] = 0.01;
+                imu_msg.angular_velocity_covariance[0] = 0.01;
+
+                imu_pub_->publish(imu_msg);
+            }
+        } catch (...) {
+            // Ignore parsing errors
+        }
+    }
+
+    // --- NEW: READ LOOP ---
+    void read_serial_loop() {
+        if (serial_fd_ == -1) return;
+
+        char buf[256];
+        int n = read(serial_fd_, buf, sizeof(buf) - 1);
+        
+        if (n > 0) {
+            buf[n] = 0; // Null terminate
+            serial_buffer_ += buf; // Append to global buffer
+
+            // Process all complete lines in the buffer
+            size_t newline_pos;
+            while ((newline_pos = serial_buffer_.find('\n')) != std::string::npos) {
+                std::string line = serial_buffer_.substr(0, newline_pos);
+                parse_and_publish_imu(line);
+                
+                // Remove processed line
+                serial_buffer_.erase(0, newline_pos + 1);
+            }
+        }
+    }
+
+    // --- WRITE LOOP ---
     void control_loop() {
         rclcpp::Time now = this->now();
         double dt = (now - last_time_).seconds();
@@ -111,30 +192,22 @@ private:
         double error = target_linear_ - current_linear_;
         double output_mps = 0.0; 
 
-        // Deadband (Stop if target is near zero)
         if (std::abs(target_linear_) < 0.01) {
             integral_error_ = 0.0;
             output_mps = 0.0;
         } else {
-            // PID Logic
             integral_error_ += error * dt;
-
-            // Anti-Windup Clamp (+/- 0.3 m/s boost)
             if (integral_error_ > 0.3) integral_error_ = 0.3;
             if (integral_error_ < -0.3) integral_error_ = -0.3;
 
-            // Feedforward
             double ff_term = target_linear_; 
             double pid_term = (kp_ * error) + (ki_ * integral_error_);
-            
             output_mps = ff_term + pid_term;
         }
 
-        // Clamp Output to Physical Limits
         if (output_mps > max_speed_) output_mps = max_speed_;
         if (output_mps < -max_speed_) output_mps = -max_speed_;
 
-        // --- JSON SERIALIZATION ---
         char buffer[64];
         int len = snprintf(buffer, sizeof(buffer), "{\"T\":5,\"L\":%.3f,\"A\":%.3f}\n", 
                            output_mps, target_angular_);
@@ -142,22 +215,12 @@ private:
         if (serial_fd_ != -1) {
             write(serial_fd_, buffer, len);
         }
-
-        // --- ADDED FOR DEBUGGING: SEE WHAT IS HAPPENING ---
-        // This will print every 200ms (to avoid spamming too fast)
-        static int debug_counter = 0;
-        if (debug_counter++ % 4 == 0) {
-             RCLCPP_INFO(this->get_logger(), "Tgt: %.2f | Act: %.2f | Out: %.2f", 
-                         target_linear_, current_linear_, output_mps);
-        }
     }
 };
 
 int main(int argc, char **argv)
 {
-    // --- ADDED FOR DEBUGGING: FIX STUCK LOGS ---
     setvbuf(stdout, NULL, _IONBF, BUFSIZ);
-
     rclcpp::init(argc, argv);
     auto node = std::make_shared<LidarVelocityController>();
     rclcpp::spin(node);

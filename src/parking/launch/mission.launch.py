@@ -168,6 +168,19 @@ def generate_launch_description():
         ]
     )
 
+    velocity_controller_node = Node(
+        package='parking',
+        executable='lidar_velocity_controller',
+        name='lidar_velocity_controller',
+        output='screen',
+        parameters=[{
+            'serial_port': '/dev/ttyTHS1',
+            'max_linear_speed': 1.0,
+            'kp': 0.5,
+            'ki': 0.2
+        }]
+    )
+
 
     return LaunchDescription([
         # 1. Start Transforms and Sensors immediately
@@ -180,6 +193,7 @@ def generate_launch_description():
         scan_republisher_node,
         goal_masking_node,
         box_estimator_node,
+        velocity_controller_node,
 
         
         # 2. Wait 3s for Lidar to spin up, then start Odom

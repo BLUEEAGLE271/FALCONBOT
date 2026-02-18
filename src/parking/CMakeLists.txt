@@ -14,6 +14,7 @@ find_package(nav_msgs REQUIRED)
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
+
 # New Deps for Masking Node & ArUco
 find_package(geometry_msgs REQUIRED) 
 find_package(tf2_ros REQUIRED)
@@ -29,7 +30,7 @@ find_package(ament_cmake_python REQUIRED)
 # 2.1. Build the C++ Node (Velocity Controller)
 # =========================================================
 add_executable(lidar_velocity_controller src/lidar_velocity_controller.cpp)
-ament_target_dependencies(lidar_velocity_controller rclcpp geometry_msgs nav_msgs)
+ament_target_dependencies(lidar_velocity_controller rclcpp geometry_msgs nav_msgs sensor_msgs)
 install(TARGETS lidar_velocity_controller DESTINATION lib/${PROJECT_NAME})
 
 # =========================================================

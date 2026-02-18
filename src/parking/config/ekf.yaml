@@ -1,22 +1,18 @@
-### ekf.yaml ###
 ekf_filter_node:
   ros__parameters:
-    frequency: 30.0  # <--- Upsamples 10Hz input to 50Hz output
+    frequency: 30.0  
     two_d_mode: true
     publish_acceleration: false
     publish_tf: true
-    map_frame: map              # We don't use map frame here, but required param
-    odom_frame: odom            # The fixed frame
-    base_link_frame: base_link  # The robot frame
-    world_frame: odom           # EKF publishes odom -> base_link
+    map_frame: map              
+    odom_frame: odom            
+    base_link_frame: base_link  
+    world_frame: odom           
 
     # --- INPUT 1: RF2O Lidar Odometry ---
-    # We listen to the topic we will rename in Step 3
     odom0: /odom_rf2o
     
-    # The config matrix: [x, y, z, roll, pitch, yaw, vx, vy, vz, vroll, vpitch, vyaw, ax, ay, az]
-    # We ONLY fuse velocities (vx, vy, vyaw) from RF2O. 
-    # This prevents the robot from "jumping" if the lidar matches wrongly for a frame.
+    # We fuse velocities (vx, vy, vyaw) from RF2O. 
     odom0_config: [false, false, false,
                    false, false, false,
                    true,  true,  false,
@@ -24,15 +20,52 @@ ekf_filter_node:
                    false, false, false]
                    
     odom0_differential: false
-
     odom0_pose_rejection_threshold: 15.0
     odom0_twist_rejection_threshold: 15.0
-
-    # 2. Time Synchronization
-    # Allow 0.2s of slop for network/processing delay
-
     odom0_queue_size: 3
-    transform_timeout: 0.0
     odom0_nodelay: true
 
+    # --- INPUT 2: IMU (Added) ---
+    imu0: /imu/data
+    
+    # Config Matrix: [x, y, z, roll, pitch, yaw, vx, vy, vz, vroll, vpitch, vyaw, ax, ay, az]
+    # We fuse:
+    # 1. Vyaw (Angular Velocity Z) -> Gyro: Critical for accurate turning
+    # 2. Ax   (Linear Accel X)     -> Accel: Helps detect "starts" faster than Lidar
+    imu0_config: [false, false, false,
+                  false, false, false,
+                  false, false, false,
+                  false, false, true,
+                  true,  false, false]
+
+    # CRITICAL: Since your IMU likely includes gravity in the raw data,
+    # this setting attempts to remove the ~9.81m/s^2 from the reading.
+    imu0_remove_gravitational_acceleration: true
+
+    # IMU Rejection (Ignore massive spikes)
+    imu0_pose_rejection_threshold: 0.8
+    imu0_twist_rejection_threshold: 0.8
+    imu0_linear_acceleration_rejection_threshold: 0.8
+
+    # Process Noise Covariance (Tuning)
+    # This matrix tells the EKF how much to "trust" the physics model vs the sensors.
+    # We increase the diagonals for accel/gyro slightly to account for robot vibration.
+    # (Diagonals: x, y, z, r, p, y, vx, vy, vz, vroll, vpitch, vyaw, ax, ay, az)
+    process_noise_covariance: [0.05, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
+                               0.0,  0.05, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
+                               0.0,  0.0,  0.06, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
+                               0.0,  0.0,  0.0,  0.03, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
+                               0.0,  0.0,  0.0,  0.0,  0.03, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
+                               0.0,  0.0,  0.0,  0.0,  0.0,  0.06, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
+                               0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.025,0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
+                               0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.025,0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
+                               0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.04, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
+                               0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.01, 0.0,  0.0,  0.0,  0.0,  0.0,
+                               0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.01, 0.0,  0.0,  0.0,  0.0,
+                               0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.02, 0.0,  0.0,  0.0,
+                               0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.01, 0.0,  0.0,
+                               0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.01, 0.0,
+                               0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.015]
+
+    transform_timeout: 0.0
     predict_to_current_time: false

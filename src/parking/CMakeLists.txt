@@ -74,6 +74,21 @@ ament_target_dependencies(robust_aruco
   tf2
   tf2_geometry_msgs
 )
+
+add_executable(video_streamer src/streamer_node.cpp)
+ament_target_dependencies(video_streamer
+  rclcpp
+  sensor_msgs
+  cv_bridge
+  OpenCV
+)
+
+install(TARGETS
+  video_streamer
+  DESTINATION lib/${PROJECT_NAME}
+)
+
+
 # Explicitly link OpenCV libraries (ament dependencies handle the others)
 target_link_libraries(robust_aruco ${OpenCV_LIBS})
 

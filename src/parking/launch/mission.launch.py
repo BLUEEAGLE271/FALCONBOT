@@ -174,11 +174,18 @@ def generate_launch_description():
         name='lidar_velocity_controller',
         output='screen',
         parameters=[{
-            'serial_port': '/dev/ttyTHS1',
+            'serial_port': '/dev/ttyUSB0',
             'max_linear_speed': 1.0,
-            'kp': 0.5,
-            'ki': 0.2
+            'kp': 5.0,
+            'ki': 1.0
         }]
+    )
+
+    video_streamer_node = Node(
+    package='parking',
+    executable='video_streamer',
+    name='video_streamer',
+    output='screen'
     )
 
 
@@ -194,12 +201,14 @@ def generate_launch_description():
         goal_masking_node,
         box_estimator_node,
         velocity_controller_node,
+        video_streamer_node,
+        
 
         
         # 2. Wait 3s for Lidar to spin up, then start Odom
         TimerAction(period=2.0, actions=[rf2o_node]),
         
-        #TimerAction(period=4.0, actions=[robot_localization_node]),
+        TimerAction(period=4.0, actions=[robot_localization_node]),
 
         # 3. Wait 5s for Odom to stabilize, then start SLAM
        # TimerAction(period=6.0, actions=[slam_node]),

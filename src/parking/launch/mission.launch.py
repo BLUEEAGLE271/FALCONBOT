@@ -174,10 +174,11 @@ def generate_launch_description():
         name='lidar_velocity_controller',
         output='screen',
         parameters=[{
-            'serial_port': '/dev/ttyUSB0',
+            'serial_port': '/dev/esp32',
             'max_linear_speed': 1.0,
-            'kp': 5.0,
-            'ki': 1.0
+            'smc_lambda': 3.0,   # Equivalent to old Ki, closes the steady-state gap
+            'smc_k': 0.6,        # The raw "Punch" voltage to break static friction
+            'smc_phi': 0.5      # The smoothing layer to prevent 20Hz vibration
         }]
     )
 
@@ -199,7 +200,6 @@ def generate_launch_description():
         aruco_node,
         scan_republisher_node,
         goal_masking_node,
-        box_estimator_node,
         velocity_controller_node,
         video_streamer_node,
         
@@ -211,16 +211,15 @@ def generate_launch_description():
         TimerAction(period=4.0, actions=[robot_localization_node]),
 
         # 3. Wait 5s for Odom to stabilize, then start SLAM
-       # TimerAction(period=6.0, actions=[slam_node]),
+        TimerAction(period=6.0, actions=[slam_node]),
 
         # 4. Wait 10s for Map to build, then start Nav2
-        #TimerAction(period=8.0, actions=[nav2_launch]),
+        TimerAction(period=8.0, actions=[nav2_launch]),
 
         # 5. Finally, start your logic
         TimerAction(period=15.0, actions=[
-            
-            
             mission_control_node,
+            box_estimator_node,
             #explore_node
         ])
     ])

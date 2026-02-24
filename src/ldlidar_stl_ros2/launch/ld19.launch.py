@@ -32,7 +32,7 @@ def generate_launch_description():
         {'product_name': 'LDLiDAR_LD19'},
         {'topic_name': 'scan'},
         {'frame_id': 'base_laser'},
-        {'port_name': '/dev/ttyUSB1'},
+        {'port_name': '/dev/lidar'},
         {'port_baudrate': 230400},
         {'publish_on_ros_time': True},
         {'use_system_clock': True},

@@ -1,15 +1,19 @@
 <root main_tree_to_execute="MainTree">
   <BehaviorTree ID="MainTree">
-    <PipelineSequence name="NavigateWithReplanning">
+    
+    <GoalUpdater input_goal="{goal}" output_goal="{updated_goal}">
       
-      <RateController hz="10.0">
-        <GoalUpdater input_goal="{goal}" output_goal="{updated_goal}">
+      <PipelineSequence name="DynamicFollowing">
+        
+        <RateController hz="2.0">
           <ComputePathToPose goal="{updated_goal}" path="{path}" planner_id="GridBased"/>
-        </GoalUpdater>
-      </RateController>
-
-      <FollowPath path="{path}" controller_id="FollowPath"/>
+        </RateController>
+        
+        <FollowPath path="{path}" controller_id="FollowPath"/>
+        
+      </PipelineSequence>
       
-    </PipelineSequence>
+    </GoalUpdater>
+    
   </BehaviorTree>
 </root>

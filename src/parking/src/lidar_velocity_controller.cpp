@@ -25,14 +25,16 @@ public:
     {
         // --- TUNING PARAMETERS ---
         this->declare_parameter("max_linear_speed", 1.0);
-        this->declare_parameter("kp", 1.0);
-        this->declare_parameter("ki", 0.2);
-        this->declare_parameter("serial_port", "/dev/ttyUSB0");
+        this->declare_parameter("serial_port", "/dev/esp32");
+        this->declare_parameter("smc_lambda", 2.0);
+        this->declare_parameter("smc_k", 0.6);
+        this->declare_parameter("smc_phi", 0.15);
 
         max_speed_ = this->get_parameter("max_linear_speed").as_double();
-        kp_ = this->get_parameter("kp").as_double();
-        ki_ = this->get_parameter("ki").as_double();
-        load_pid_from_file();
+        smc_lambda_ = this->get_parameter("smc_lambda").as_double();
+        smc_k_ = this->get_parameter("smc_k").as_double();
+        smc_phi_ = this->get_parameter("smc_phi").as_double();
+        load_smc_from_file();
         std::string port = this->get_parameter("serial_port").as_string();
 
         // --- SERIAL SETUP ---
@@ -43,7 +45,7 @@ public:
 
         // --- SUBSCRIBERS ---
         cmd_vel_sub_ = this->create_subscription<geometry_msgs::msg::Twist>(
-            "cmd_vel", 10, std::bind(&LidarVelocityController::cmd_vel_callback, this, _1));
+            "/cmd_vel", 10, std::bind(&LidarVelocityController::cmd_vel_callback, this, _1));
 
         odom_sub_ = this->create_subscription<nav_msgs::msg::Odometry>(
             "odom_rf2o", 10, std::bind(&LidarVelocityController::odom_callback, this, _1));
@@ -74,14 +76,15 @@ private:
     double target_linear_ = 0.0;
     double target_angular_ = 0.0;
     double current_linear_ = 0.0;
+    double current_angular_ = 0.0; // <--- ADD THIS
     double integral_error_ = 0.0;
     double max_speed_;
-    double kp_, ki_;
+    double smc_lambda_, smc_k_, smc_phi_; // New SMC Variables
     rclcpp::Time last_time_;
     
     // Buffer for storing incoming serial bytes until we find a newline
     std::string serial_buffer_ = ""; 
-
+    std::string smc_file_ = "/home/blueeagle/lidar_smc_config.txt";
     // --- ROS HANDLES ---
     rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_sub_;
     rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
@@ -118,33 +121,17 @@ private:
 
     void odom_callback(const nav_msgs::msg::Odometry::SharedPtr msg) {
         current_linear_ = msg->twist.twist.linear.x;
+        current_angular_ = msg->twist.twist.angular.z;
     }
 
     // --- NEW: PARSE JSON MANUALLY ---
     // Example: {"T":2,"ax":0.123,"gz":0.005}
     void parse_serial_data(std::string line) {
         
-        // 1. Check for PID Update: {"T":201,"kp":0.5,"ki":0.2}
-        if (line.find("\"T\":201") != std::string::npos) {
-            try {
-                size_t kp_pos = line.find("\"kp\":");
-                size_t ki_pos = line.find("\"ki\":");
-                size_t end_pos = line.find("}");
-                
-                if (kp_pos != std::string::npos && ki_pos != std::string::npos) {
-                    std::string kp_str = line.substr(kp_pos + 5, ki_pos - (kp_pos + 5) - 1);
-                    std::string ki_str = line.substr(ki_pos + 5, end_pos - (ki_pos + 5));
-                    
-                    kp_ = std::stod(kp_str);
-                    ki_ = std::stod(ki_str);
-                    RCLCPP_INFO(this->get_logger(), "UPDATED PID: Kp=%.2f, Ki=%.2f", kp_, ki_);
-                    save_pid_to_file();
-                }
-            } catch (...) { RCLCPP_ERROR(this->get_logger(), "PID Parse Error"); }
-        }
+        
 
         // 2. Check for Mission Trigger: {"T":202,"cmd":1}
-        else if (line.find("\"T\":202") != std::string::npos) {
+        if (line.find("\"T\":202") != std::string::npos) {
             try {
                 size_t cmd_pos = line.find("\"cmd\":");
                 if (cmd_pos != std::string::npos) {
@@ -213,25 +200,20 @@ private:
 
     const std::string pid_file_ = "/home/blueeagle/lidar_pid_config.txt";
 
-    void save_pid_to_file() {
-        std::ofstream outfile(pid_file_);
+    void save_smc_to_file() {
+        std::ofstream outfile(smc_file_);
         if (outfile.is_open()) {
-            outfile << kp_ << " " << ki_;
+            outfile << smc_lambda_ << " " << smc_k_ << " " << smc_phi_;
             outfile.close();
-            RCLCPP_INFO(this->get_logger(), "PID Saved to file: %.2f, %.2f", kp_, ki_);
-        } else {
-            RCLCPP_ERROR(this->get_logger(), "Could not save PID file! Check permissions.");
+            RCLCPP_INFO(this->get_logger(), "SMC Saved: L=%.2f, K=%.2f, Phi=%.2f", smc_lambda_, smc_k_, smc_phi_);
         }
     }
 
-    void load_pid_from_file() {
-        std::ifstream infile(pid_file_);
+    void load_smc_from_file() {
+        std::ifstream infile(smc_file_);
         if (infile.is_open()) {
-            double loaded_kp, loaded_ki;
-            if (infile >> loaded_kp >> loaded_ki) {
-                kp_ = loaded_kp;
-                ki_ = loaded_ki;
-                RCLCPP_INFO(this->get_logger(), "Loaded PID from file: %.2f, %.2f", kp_, ki_);
+            if (infile >> smc_lambda_ >> smc_k_ >> smc_phi_) {
+                RCLCPP_INFO(this->get_logger(), "Loaded SMC: L=%.2f, K=%.2f, Phi=%.2f", smc_lambda_, smc_k_, smc_phi_);
             }
         }
     }
@@ -244,28 +226,53 @@ private:
         double error = target_linear_ - current_linear_;
         double output_mps = 0.0; 
 
-        
-    
-    // DEBUG PRINT: Throttled to every 1000ms (1 second)
-        RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 100, 
-        "VELOCITY DEBUG: Target: %.3f | Measured: %.3f | Error: %.3f", 
-        target_linear_, current_linear_, error);
-        RCLCPP_INFO(this->get_logger(), "OUT: %.2f | ERR: %.2f", output_mps, error);
+        // --- SMC TUNING PARAMETERS ---
+        // (You can later move these to your declare_parameter block)
+        ;         // Boundary Layer Thickness (smooths out the 20Hz chatter)
+
         if (std::abs(target_linear_) < 0.01) {
             integral_error_ = 0.0;
             output_mps = 0.0;
         } else {
+            // 1. Integral of the error (Required for the Sliding Surface)
             integral_error_ += error * dt;
-            if (integral_error_ > 0.3) integral_error_ = 0.3;
-            if (integral_error_ < -0.3) integral_error_ = -0.3;
+            // Cap it slightly higher to allow for sustained pushing during tight turns
+            if (integral_error_ > 1.0) integral_error_ = 1.0;
+            if (integral_error_ < -1.0) integral_error_ = -1.0;
 
-            double ff_term = target_linear_; 
-            double pid_term = (kp_ * error) + (ki_ * integral_error_);
-            output_mps = ff_term + pid_term;
+            // 2. Define the Sliding Surface (s)
+            double s = error + (smc_lambda_ * integral_error_);
+
+            // 3. The Saturation Function (Creates the Boundary Layer)
+            double sat_s = s / smc_phi_;
+            if (sat_s > 1.0) sat_s = 1.0;
+            if (sat_s < -1.0) sat_s = -1.0;
+
+            // 4. Equivalent Control (Feedforward) + Switching Control
+            double u_eq = target_linear_; 
+            
+            // Dynamic Turn Compensation: Add more power if we are turning
+            double turn_friction_boost = std::abs(target_angular_) * 0.05;
+            u_eq += (target_linear_ > 0 ? turn_friction_boost : -turn_friction_boost);
+
+            // Final Output Calculation
+            output_mps = u_eq + (smc_k_ * sat_s);
         }
 
+        // Hardware safety limits
         if (output_mps > max_speed_) output_mps = max_speed_;
         if (output_mps < -max_speed_) output_mps = -max_speed_;
+
+        // DEBUG PRINT: Placed AFTER math to show the true output
+        /* RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 50, 
+            "LOG | L_Tgt: %.2f L_Meas: %.2f | A_Tgt: %.2f A_Meas: %.2f | OUT: %.2f", 
+            target_linear_, current_linear_, target_angular_, current_angular_, output_mps);
+        // --- CALL TO ACTION ---
+        // Triggers when the SMC successfully forces the robot to the target speed
+        if (std::abs(error) < 0.05 && std::abs(target_linear_) > 0) {
+            RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 2000, 
+                ">>> TARGET VELOCITY LOCKED: READY TO COMMENCE PARKING SEQUENCE! <<<");
+        } */
 
         char buffer[64];
         int len = snprintf(buffer, sizeof(buffer), "{\"T\":5,\"L\":%.3f,\"A\":%.3f}\n", 

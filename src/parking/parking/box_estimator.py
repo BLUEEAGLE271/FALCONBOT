@@ -10,6 +10,7 @@ import tf_transformations as tft
 import numpy as np
 import math
 from collections import deque
+from geometry_msgs.msg import PoseStamped, Polygon, Point32
 
 class BoxEstimator(Node):
     def __init__(self):
@@ -24,6 +25,7 @@ class BoxEstimator(Node):
         
         self.target_ids = [0, 1, 2, 3]
         self.navigation_started = False 
+        self.footprint_shrunk = False
 
         # --- GEOMETRY ---
         self.marker_transforms = {}
@@ -40,7 +42,8 @@ class BoxEstimator(Node):
         self.mask_pub = self.create_publisher(PoseStamped, '/parking_goal', 10)
         self.box_pub = self.create_publisher(PoseStamped, '/box_center_pose', 10) # <--- You asked for this
         self.viz_pub = self.create_publisher(MarkerArray, '/box_debug_axes', 10)  # <--- NEW DEBUG VISUALIZER
-
+        self.local_footprint_pub = self.create_publisher(Polygon, '/local_costmap/footprint', 10)
+        self.global_footprint_pub = self.create_publisher(Polygon, '/global_costmap/footprint', 10)
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
 
@@ -166,7 +169,7 @@ class BoxEstimator(Node):
             goal_y = avg_y + safe_offset * math.sin(avg_yaw)
             goal_yaw = avg_yaw + math.pi # Face opposite to Box Front
 
-            self.execute_dynamic_goal(goal_x, goal_y, goal_yaw)
+            self.execute_dynamic_goal(goal_x, goal_y, goal_yaw, t.x, t.y)
 
         except Exception as e:
             self.get_logger().warn(f"Math Error: {e}")
@@ -226,8 +229,24 @@ class BoxEstimator(Node):
         marker_array.markers.append(m2)
 
         self.viz_pub.publish(marker_array)
+    
+    def shrink_footprint(self):
+        poly = Polygon()
+        
+        # Define a microscopic footprint (1cm radius)
+        
+        tiny_points = [[-0.05, -0.05], [-0.05, 0.05], [0.05, 0.05], [0.05, -0.05]]
+        for p in tiny_points:
+            pt = Point32()
+            pt.x, pt.y, pt.z = float(p[0]), float(p[1]), 0.0
+            poly.points.append(pt)
+            
+        # Tell both costmaps to update their collision math immediately
+        self.local_footprint_pub.publish(poly)
+        self.global_footprint_pub.publish(poly)
+        self.get_logger().info("🛡️ Footprint shrunk! Authorizing entry into the box.")
 
-    def execute_dynamic_goal(self, x, y, yaw):
+    def execute_dynamic_goal(self, x, y, yaw, robot_x, robot_y):
         goal_msg = PoseStamped()
         goal_msg.header.stamp = self.get_clock().now().to_msg()
         goal_msg.header.frame_id = "odom"
@@ -242,31 +261,38 @@ class BoxEstimator(Node):
         # 1. Always publish to Masking Node (High Frequency is OK here)
         self.mask_pub.publish(goal_msg)
 
-        # 2. Check if we should send to Nav2
-        # Logic: Only send if we haven't started yet OR if the goal has changed significantly
-        if not self.navigation_started:
-            self.send_nav2_goal(goal_msg)
-            self.navigation_started = True
-            self.last_goal_time = self.get_clock().now()
+        distance_to_goal = math.hypot(x - robot_x, y - robot_y)
 
-        # OPTIONAL: Update the goal every 2 seconds if the box moves
-        current_time = self.get_clock().now()
-        if (current_time - self.last_goal_time).nanoseconds > 5e9:
-             self.send_nav2_goal(goal_msg)
-             self.last_goal_time = current_time
+        if distance_to_goal < 0.20:
+            # We are close enough. Stop sending updates so MPPI can park smoothly without jitter.
+            return
+        if distance_to_goal < 0.25 and not self.footprint_shrunk:
+            self.get_logger().info(f"Target is {distance_to_goal:.2f}m away! Dropping shields and shrinking footprint.")
+            self.shrink_footprint()
+            self.footprint_shrunk = True
+
+        
+        # 2. Dynamic Nav2 Updates (The GoalUpdater Method)
+        if not self.navigation_started:
+            # PHASE 1: Wait for a TRUE response before switching phases
+            if self.send_nav2_goal(goal_msg):
+                self.navigation_started = True
+                self.get_logger().info("Initial Action Goal Sent. Switching to dynamic topic updates.")
+        else:
+            # PHASE 2
+            self.update_pub.publish(goal_msg)
     
     def send_nav2_goal(self, pose_stamped):
         self.get_logger().info("🚀 SENDING GOAL TO NAV2...")
         
         if not self.nav_client.wait_for_server(timeout_sec=5.0):
-            self.get_logger().error("Nav2 Action Server not available!")
-            return
+            self.get_logger().error("Nav2 Action Server not available! Will try again.")
+            return False
 
         goal_msg = NavigateToPose.Goal()
         goal_msg.pose = pose_stamped
-        
-        # Send asynchronously so we don't block the camera callback
         self.nav_client.send_goal_async(goal_msg)
+        return True # Success!
 
 def main():
     rclpy.init()

@@ -85,7 +85,7 @@ private:
             
             cv::aruco::DetectorParameters detectorParams = cv::aruco::DetectorParameters();
             detectorParams.cornerRefinementMethod = cv::aruco::CORNER_REFINE_SUBPIX;
-            cv::aruco::Dictionary dictionary = cv::aruco::getPredefinedDictionary(cv::aruco::DICT_6X6_250);
+            cv::aruco::Dictionary dictionary = cv::aruco::getPredefinedDictionary(cv::aruco::DICT_6X6_50);
             cv::aruco::ArucoDetector detector(dictionary, detectorParams);
             
             detector.detectMarkers(cv_ptr->image, corners, ids);
@@ -95,7 +95,14 @@ private:
                 
                 for (size_t i = 0; i < ids.size(); i++) {
                     int current_id = ids[i];
-                    double current_size = (current_id == small_id_) ? small_size_ : default_size_;
+
+                    double current_size;
+                    if (current_id == small_id_) {
+                        current_size = small_size_; 
+                    } else {
+                        current_size = default_size_; 
+                    }
+                    //double current_size = (current_id == small_id_) ? small_size_ : default_size_;
                     double alpha = (current_id == small_id_) ? alpha_small_ : alpha_default_;
 
                     std::vector<cv::Point3f> objPoints;

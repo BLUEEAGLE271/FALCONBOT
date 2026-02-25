@@ -21,7 +21,7 @@ class BoxEstimator(Node):
         self.BOX_WIDTH  = 0.20   
         self.half_L = self.BOX_LENGTH / 2.0
         self.half_W = self.BOX_WIDTH / 2.0
-        self.APPROACH_DIST = 0.1 
+        self.APPROACH_DIST = 0.15 
         
         self.target_ids = [0, 1, 2, 3]
         self.navigation_started = False 
@@ -32,7 +32,7 @@ class BoxEstimator(Node):
         self.setup_box_geometry()
 
         # --- FILTERING ---
-        self.filter_size = 5 
+        self.filter_size = 1 
         self.pose_history = {} 
 
         # --- ROS SETUP ---

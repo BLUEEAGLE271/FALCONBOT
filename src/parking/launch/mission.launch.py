@@ -150,11 +150,13 @@ def generate_launch_description():
         name='robust_aruco',
         output='screen',
         parameters=[{
-            'marker_size': 0.094,    # 9.4 cm
-            'target_id': 1,          # Wall marker ID
+            'marker_size_default': 0.094,    # IDs 0, 1, 2
+            'marker_size_small': 0.0849,    # Your new ID 3 size
+            'small_marker_id': 3,           # Identifies which one is unique
+            'target_id': 1,
             'camera_frame': 'camera_optical_frame',
-            'marker_frame': 'marker_1',
-            'filter_alpha': 0.3      # Smoothing factor
+            'filter_alpha_default': 0.3,    # Standard smoothing
+            'filter_alpha_small': 0.1
         }]
     )
     goal_masking_node = Node(
@@ -211,16 +213,16 @@ def generate_launch_description():
         TimerAction(period=4.0, actions=[robot_localization_node]),
 
         # 3. Wait 5s for Odom to stabilize, then start SLAM
-        TimerAction(period=6.0, actions=[slam_node]),
+         TimerAction(period=6.0, actions=[slam_node]),
 
-        # 4. Wait 10s for Map to build, then start Nav2
+        # # 4. Wait 10s for Map to build, then start Nav2
         TimerAction(period=8.0, actions=[nav2_launch]),
 
-        # 5. Finally, start your logic
+        # # 5. Finally, start your logic
         TimerAction(period=15.0, actions=[
             mission_control_node,
-            box_estimator_node,
-            #explore_node
-        ])
+            #box_estimator_node,
+        #     #explore_node
+         ])
     ])
 

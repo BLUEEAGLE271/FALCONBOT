@@ -21,7 +21,7 @@ class BoxEstimator(Node):
         self.BOX_WIDTH  = 0.20   
         self.half_L = self.BOX_LENGTH / 2.0
         self.half_W = self.BOX_WIDTH / 2.0
-        self.APPROACH_DIST = 0.15 
+        self.APPROACH_DIST = 0.1 
         
         self.target_ids = [0, 1, 2, 3]
         self.navigation_started = False 
@@ -263,7 +263,7 @@ class BoxEstimator(Node):
 
         distance_to_goal = math.hypot(x - robot_x, y - robot_y)
 
-        if distance_to_goal < 0.20:
+        if distance_to_goal < 0.10:
             # We are close enough. Stop sending updates so MPPI can park smoothly without jitter.
             return
         if distance_to_goal < 0.25 and not self.footprint_shrunk:

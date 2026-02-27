@@ -219,9 +219,9 @@ def generate_launch_description():
         TimerAction(period=8.0, actions=[nav2_launch]),
 
         # # 5. Finally, start your logic
-        TimerAction(period=15.0, actions=[
+        TimerAction(period=25.0, actions=[
             mission_control_node,
-            #box_estimator_node,
+            box_estimator_node,
         #     #explore_node
          ])
     ])

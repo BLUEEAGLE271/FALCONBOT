@@ -97,30 +97,36 @@ controller_server:
 
     FollowPath:
       plugin: "nav2_mppi_controller::MPPIController"
-      time_steps: 15
+      time_steps: 70
       trajectory_step: 1
       publish_optimal_trajectory: true
       visualize: true
-      batch_size: 400
+      batch_size: 200
       use_sim_time: False
-      iteration_count: 1
+      iteration_count: 3
+      use_unordered_multithreading: true
       # ... (keep your time_steps, batch_size, etc.) ...
       
       # 1. CHANGE THE MOTION MODEL
-      motion_model: "DiffDrive"  # <--- This is the key switch
+      motion_model: "Ackermann"  # <--- This is the key switch
       
       # 2. DEFINE THE GEOMETRY (The "Cheat" Prevention)
       # This is the strict physical constraint you asked for.
-      min_turning_r: 0.05         # The robot CANNOT turn tighter than this (0.5m radius)
+      AckermannConstraints:
+        min_turning_r: 0.15       # The robot CANNOT turn tighter than this (0.5m radius)
       
       # 3. SPEEDS (Mouse Mode)
-      vx_max: 0.2
+      vx_max: 0.3
       vx_min: 0.0    # You NEED reverse to park with Ackermann (like a car parallel parking)
       wz_max: 2.0     # Max rotation speed
+
+      vx_std: 0.1
+      vy_std: 0.0  # Must be 0 for DiffDrive
+      wz_std: 1.5
       
       # 4. CRITICS (Tuned for Arcs)
       # We remove 'PathAngleCritic' because it often tempts the robot to spin in place to fix heading.
-      critics: ["ConstraintCritic", "ObstaclesCritic", "GoalCritic", "PreferForwardCritic"]
+      critics: ["ConstraintCritic","PathAlignCritic","PathFollowCritic","ObstaclesCritic", "GoalCritic", "PreferForwardCritic"]
   
       # ... (ObstaclesCritic, GoalCritic etc. remain same as before) ...
       ConstraintCritic:
@@ -131,40 +137,41 @@ controller_server:
       # CRITICAL: This critic forces the robot to align with the path using curves, not spins.
       PathAlignCritic:
         enabled: true
-        cost_weight: 1.0
+        cost_power: 1
+        cost_weight: 5.0
         use_path_orientations: true
 
       GoalAngleCritic:
         enabled: true
         cost_power: 1
-        cost_weight: 10.0   # How strongly it cares about the final angle
-        threshold_to_consider: 0.5 # Only start worrying about the angle when within 0.5m of the goal
+        cost_weight: 100.0   # How strongly it cares about the final angle
+        threshold_to_consider: 1.0 # Only start worrying about the angle when within 0.5m of the goal
 
       GoalCritic:
         enabled: true
         cost_power: 1
-        cost_weight: 5.0
-        threshold_to_consider: 1.4
+        cost_weight: 20.0
+        threshold_to_consider: 1.0
 
       ObstaclesCritic:
         enabled: true
         cost_power: 1
         repulsion_weight: 0.5  # LOW weight = Not afraid of walls (Mouse mode)
-        critical_weight: 15.0  # HIGH weight = But never hit them
+        critical_weight: 100.0  # HIGH weight = But never hit them
         near_goal_distance: 0.3
         consider_footprint: true
 
       PathFollowCritic:
         enabled: true
         cost_power: 1
-        cost_weight: 15.0
-        offset_from_furthest: 2
+        cost_weight: 5.0
+        offset_from_furthest: 3
         threshold_to_consider: 0.4
 
       PreferForwardCritic:
         enabled: true
         cost_power: 1
-        cost_weight: 1.0
+        cost_weight: 0.1
         threshold_to_consider: 0.5
 
 local_costmap:
@@ -187,7 +194,7 @@ local_costmap:
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 25.0
-        inflation_radius: 0.08
+        inflation_radius: 0.04
       obstacle_layer:
         plugin: "nav2_costmap_2d::ObstacleLayer"
         observation_sources: scan
@@ -213,12 +220,12 @@ global_costmap:
       use_sim_time: False
       always_send_full_costmap: False
       rolling_window: true
-      width: 4
-      height: 4
+      width: 3
+      height: 3
       ##robot_radius: 0.20
       footprint: "[[-0.097, -0.084], [-0.097, 0.084], [0.097, 0.084], [0.097, -0.084]]"
       transform_tolerance: 1.2
-      resolution: 0.05
+      resolution: 0.03
       track_unknown_space: true
       plugins: ["obstacle_layer", "inflation_layer"]
       obstacle_layer:
@@ -257,19 +264,19 @@ planner_server:
       plugin: "nav2_smac_planner/SmacPlannerHybrid"  # <--- The "Car-Like" Planner
       downsample_costmap: false
       downsampling_factor: 1
-      tolerance: 0.05
+      tolerance: 0.02
       allow_unknown: true
       max_iterations: 1000000
       max_on_approach_iterations: 1000
-      max_planning_time: 2.0
+      max_planning_time: 3.0
       motion_model_for_search: "DUBIN" # <--- "DUBIN" = Forward Only (No Reversing)
-      non_straight_penalty: 2.0        # (Was 1.2) Punish turning
-      cost_travel_multiplier: 5.0      # (Was 2.0) Punish long paths (loops are long)
-      change_penalty: 0.5              # Punish changing from straight to turn
-      analytic_expansion_ratio: 5.0 
-      analytic_expansion_max_length: 3.0
-      angle_quantization_ns: 72
-      minimum_turning_radius: 0.05     # <--- MUST match your controller's radius
+      non_straight_penalty: 4.0        # (Was 1.2) Punish turning
+      cost_travel_multiplier: 20.0      # (Was 2.0) Punish long paths (loops are long)
+      change_penalty: 0.1              # Punish changing from straight to turn
+      analytic_expansion_ratio: 1.0 
+      analytic_expansion_max_length: 0.2
+      angle_quantization_ns: 144
+      minimum_turning_radius: 0.15     # <--- MUST match your controller's radius
       reverse_penalty: 1000.0
       
       

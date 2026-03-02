@@ -101,7 +101,7 @@ controller_server:
       trajectory_step: 1
       publish_optimal_trajectory: true
       visualize: true
-      batch_size: 200
+      batch_size: 500
       use_sim_time: False
       iteration_count: 3
       use_unordered_multithreading: true
@@ -113,12 +113,12 @@ controller_server:
       # 2. DEFINE THE GEOMETRY (The "Cheat" Prevention)
       # This is the strict physical constraint you asked for.
       AckermannConstraints:
-        min_turning_r: 0.15       # The robot CANNOT turn tighter than this (0.5m radius)
+        min_turning_r: 0.3       # The robot CANNOT turn tighter than this (0.5m radius)
       
       # 3. SPEEDS (Mouse Mode)
       vx_max: 0.3
       vx_min: 0.0    # You NEED reverse to park with Ackermann (like a car parallel parking)
-      wz_max: 2.0     # Max rotation speed
+      wz_max: 4.0     # Max rotation speed
 
       vx_std: 0.1
       vy_std: 0.0  # Must be 0 for DiffDrive
@@ -132,7 +132,7 @@ controller_server:
       ConstraintCritic:
         enabled: true
         cost_power: 1
-        cost_weight: 1.0
+        cost_weight: 5.0
 
       # CRITICAL: This critic forces the robot to align with the path using curves, not spins.
       PathAlignCritic:
@@ -144,28 +144,28 @@ controller_server:
       GoalAngleCritic:
         enabled: true
         cost_power: 1
-        cost_weight: 100.0   # How strongly it cares about the final angle
-        threshold_to_consider: 0.6 # Only start worrying about the angle when within 0.5m of the goal
+        cost_weight: 5.0   # How strongly it cares about the final angle
+        threshold_to_consider: 0.4 # Only start worrying about the angle when within 0.5m of the goal
 
       GoalCritic:
         enabled: true
         cost_power: 1
-        cost_weight: 20.0
-        threshold_to_consider: 0.6
+        cost_weight: 5.0
+        threshold_to_consider: 0.4
 
       ObstaclesCritic:
         enabled: true
         cost_power: 1
         repulsion_weight: 0.5  # LOW weight = Not afraid of walls (Mouse mode)
-        critical_weight: 100.0  # HIGH weight = But never hit them
+        critical_weight: 50.0  # HIGH weight = But never hit them
         near_goal_distance: 0.0
         consider_footprint: true
 
       PathFollowCritic:
         enabled: true
         cost_power: 1
-        cost_weight: 5.0
-        offset_from_furthest: 3
+        cost_weight: 50.0
+        offset_from_furthest: 2
         threshold_to_consider: 0.4
 
       PreferForwardCritic:
@@ -193,7 +193,7 @@ local_costmap:
       plugins: ["obstacle_layer", "inflation_layer"]
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 25.0
+        cost_scaling_factor: 10.0
         inflation_radius: 0.04
       obstacle_layer:
         plugin: "nav2_costmap_2d::ObstacleLayer"
@@ -252,7 +252,7 @@ global_costmap:
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 15.0
-        inflation_radius: 0.08
+        inflation_radius: 0.04
 
 
 planner_server:
@@ -264,20 +264,21 @@ planner_server:
       plugin: "nav2_smac_planner/SmacPlannerHybrid"  # <--- The "Car-Like" Planner
       downsample_costmap: false
       downsampling_factor: 1
-      tolerance: 0.02
+      tolerance: 0.0
+      use_final_approach_orientation: true
       allow_unknown: true
       max_iterations: 1000000
       max_on_approach_iterations: 1000
       max_planning_time: 3.0
       motion_model_for_search: "DUBIN" # <--- "DUBIN" = Forward Only (No Reversing)
-      non_straight_penalty: 5.0        # (Was 1.2) Punish turning
-      cost_travel_multiplier: 2.5      # (Was 2.0) Punish long paths (loops are long)
-      change_penalty: 0.1              # Punish changing from straight to turn
+      non_straight_penalty: 1000.0        # (Was 1.2) Punish turning
+      cost_travel_multiplier: 1.0     # (Was 2.0) Punish long paths (loops are long)
+      change_penalty: 50.0              # Punish changing from straight to turn
       retrospective_penalty: 0.0
-      analytic_expansion_ratio: 1.5 
-      analytic_expansion_max_length: 0.75
+      analytic_expansion_ratio: 3.5 
+      analytic_expansion_max_length: 0.5
       angle_quantization_bins: 144
-      minimum_turning_radius: 0.15     # <--- MUST match your controller's radius
+      minimum_turning_radius: 0.3     # <--- MUST match your controller's radius
       reverse_penalty: 1000.0
       
       
@@ -287,7 +288,7 @@ behavior_server:
   ros__parameters:
     costmap_topic: local_costmap/costmap_raw
     footprint_topic: local_costmap/published_footprint
-    cycle_frequency: 10.0
+    cycle_frequency: 5.0
     recovery_plugins: ["spin", "backup", "wait"]
     spin:
       plugin: "nav2_behaviors/Spin"

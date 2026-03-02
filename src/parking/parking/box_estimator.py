@@ -32,7 +32,7 @@ class BoxEstimator(Node):
         self.setup_box_geometry()
 
         # --- FILTERING ---
-        self.filter_size = 1 
+        self.filter_size = 5 
         self.pose_history = {} 
 
         # --- ROS SETUP ---
@@ -235,7 +235,7 @@ class BoxEstimator(Node):
         
         # Define a microscopic footprint (1cm radius)
         
-        tiny_points = [[-0.05, -0.05], [-0.05, 0.05], [0.05, 0.05], [0.05, -0.05]]
+        tiny_points = [[-0.04, -0.04], [-0.04, 0.04], [0.04, 0.04], [0.04, -0.04]]
         for p in tiny_points:
             pt = Point32()
             pt.x, pt.y, pt.z = float(p[0]), float(p[1]), 0.0

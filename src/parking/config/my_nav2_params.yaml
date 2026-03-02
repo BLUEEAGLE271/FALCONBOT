@@ -126,7 +126,7 @@ controller_server:
       
       # 4. CRITICS (Tuned for Arcs)
       # We remove 'PathAngleCritic' because it often tempts the robot to spin in place to fix heading.
-      critics: ["ConstraintCritic","PathAlignCritic","PathFollowCritic","ObstaclesCritic", "GoalCritic", "PreferForwardCritic"]
+      critics: ["ConstraintCritic","PathAlignCritic","PathFollowCritic","ObstaclesCritic", "GoalCritic", "GoalAngleCritic", "PreferForwardCritic"]
   
       # ... (ObstaclesCritic, GoalCritic etc. remain same as before) ...
       ConstraintCritic:
@@ -145,20 +145,20 @@ controller_server:
         enabled: true
         cost_power: 1
         cost_weight: 100.0   # How strongly it cares about the final angle
-        threshold_to_consider: 1.0 # Only start worrying about the angle when within 0.5m of the goal
+        threshold_to_consider: 0.6 # Only start worrying about the angle when within 0.5m of the goal
 
       GoalCritic:
         enabled: true
         cost_power: 1
         cost_weight: 20.0
-        threshold_to_consider: 1.0
+        threshold_to_consider: 0.6
 
       ObstaclesCritic:
         enabled: true
         cost_power: 1
         repulsion_weight: 0.5  # LOW weight = Not afraid of walls (Mouse mode)
         critical_weight: 100.0  # HIGH weight = But never hit them
-        near_goal_distance: 0.3
+        near_goal_distance: 0.0
         consider_footprint: true
 
       PathFollowCritic:
@@ -270,12 +270,13 @@ planner_server:
       max_on_approach_iterations: 1000
       max_planning_time: 3.0
       motion_model_for_search: "DUBIN" # <--- "DUBIN" = Forward Only (No Reversing)
-      non_straight_penalty: 4.0        # (Was 1.2) Punish turning
-      cost_travel_multiplier: 20.0      # (Was 2.0) Punish long paths (loops are long)
+      non_straight_penalty: 5.0        # (Was 1.2) Punish turning
+      cost_travel_multiplier: 2.5      # (Was 2.0) Punish long paths (loops are long)
       change_penalty: 0.1              # Punish changing from straight to turn
-      analytic_expansion_ratio: 1.0 
-      analytic_expansion_max_length: 0.2
-      angle_quantization_ns: 144
+      retrospective_penalty: 0.0
+      analytic_expansion_ratio: 1.5 
+      analytic_expansion_max_length: 0.75
+      angle_quantization_bins: 144
       minimum_turning_radius: 0.15     # <--- MUST match your controller's radius
       reverse_penalty: 1000.0
       

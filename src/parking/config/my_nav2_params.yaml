@@ -154,7 +154,8 @@ controller_server:
         max_path_occupancy_ratio: 0.05
         trajectory_point_step: 3
         threshold_to_consider: 0.5
-        offset_from_furthest: 6
+        offset_from_furthest: 15
+        use_path_orientation: true
       
       PathAngleCritic:
         enabled: true
@@ -164,6 +165,8 @@ controller_server:
         threshold_to_consider: 0.5
         max_angle_to_furthest: 1.0
         forward_preference: true
+        use_path_orientations: true
+
 
       GoalAngleCritic:
         enabled: true
@@ -189,7 +192,7 @@ controller_server:
         enabled: true
         cost_power: 1
         cost_weight: 5.0
-        offset_from_furthest: 6
+        offset_from_furthest: 3
         threshold_to_consider: 0.4
 
       PreferForwardCritic:

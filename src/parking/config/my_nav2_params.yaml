@@ -98,20 +98,22 @@ controller_server:
     FollowPath:
       plugin: "nav2_mppi_controller::MPPIController"
       time_steps: 50
-      trajectory_step: 1
+      trajectory_point_step: 1
       model_dt: 0.05
       publish_optimal_trajectory: true
       visualize: true
       batch_size: 600
       use_sim_time: False
+      gamma: 0.015
       iteration_count: 1
-      prune_distance: 1.3
+      prune_distance: 0.6
       use_unordered_multithreading: true
+      regenerate_noises: false      # Biggest single CPU saving
       # ... (keep your time_steps, batch_size, etc.) ...
       
       # 1. CHANGE THE MOTION MODEL
       motion_model: "Ackermann"  # <--- This is the key switch
-      
+      temperature: 1.5 
       # 2. DEFINE THE GEOMETRY (The "Cheat" Prevention)
       # This is the strict physical constraint you asked for.
       AckermannConstraints:
@@ -120,11 +122,11 @@ controller_server:
       # 3. SPEEDS (Mouse Mode)
       vx_max: 0.3
       vx_min: 0.0    # You NEED reverse to park with Ackermann (like a car parallel parking)
-      wz_max: 4.0     # Max rotation speed
+      wz_max: 2.0     # Max rotation speed
 
       vx_std: 0.1
       vy_std: 0.0  # Must be 0 for DiffDrive
-      wz_std: 1.5
+      wz_std: 0.8
       
       # 4. CRITICS (Tuned for Arcs)
       # We remove 'PathAngleCritic' because it often tempts the robot to spin in place to fix heading.
@@ -152,12 +154,12 @@ controller_server:
         max_path_occupancy_ratio: 0.05
         trajectory_point_step: 3
         threshold_to_consider: 0.5
-        offset_from_furthest: 20
+        offset_from_furthest: 6
       
       PathAngleCritic:
         enabled: true
         cost_power: 1
-        cost_weight: 5.0
+        cost_weight: 2.0
         offset_from_furthest: 4
         threshold_to_consider: 0.5
         max_angle_to_furthest: 1.0
@@ -186,12 +188,12 @@ controller_server:
       PathFollowCritic:
         enabled: true
         cost_power: 1
-        cost_weight: 50.0
-        offset_from_furthest: 3
+        cost_weight: 5.0
+        offset_from_furthest: 6
         threshold_to_consider: 0.4
 
       PreferForwardCritic:
-        enabled: true
+        enabled: false
         cost_power: 1
         cost_weight: 0.1
         threshold_to_consider: 0.5

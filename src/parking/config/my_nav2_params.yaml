@@ -97,6 +97,7 @@ controller_server:
 
     FollowPath:
       plugin: "nav2_mppi_controller::MPPIController"
+      transform_tolerance: 0.5
       time_steps: 50
       trajectory_point_step: 1
       model_dt: 0.05
@@ -113,7 +114,7 @@ controller_server:
       
       # 1. CHANGE THE MOTION MODEL
       motion_model: "Ackermann"  # <--- This is the key switch
-      temperature: 1.5 
+      temperature: 0.3 
       # 2. DEFINE THE GEOMETRY (The "Cheat" Prevention)
       # This is the strict physical constraint you asked for.
       AckermannConstraints:
@@ -121,7 +122,7 @@ controller_server:
       
       # 3. SPEEDS (Mouse Mode)
       vx_max: 0.3
-      vx_min: 0.0    # You NEED reverse to park with Ackermann (like a car parallel parking)
+      vx_min: 0.1    # You NEED reverse to park with Ackermann (like a car parallel parking)
       wz_max: 2.0     # Max rotation speed
 
       vx_std: 0.1
@@ -130,8 +131,8 @@ controller_server:
       
       # 4. CRITICS (Tuned for Arcs)
       # We remove 'PathAngleCritic' because it often tempts the robot to spin in place to fix heading.
-      critics: ["ConstraintCritic","CostCritic","PathAngleCritic","PathAlignCritic","PathFollowCritic","ObstaclesCritic", "GoalCritic", "GoalAngleCritic", "PreferForwardCritic"]
-  
+      #critics: ["ConstraintCritic","CostCritic","PathAngleCritic","PathAlignCritic","PathFollowCritic","ObstaclesCritic", "GoalCritic", "GoalAngleCritic", "PreferForwardCritic"]
+      critics: ["PathFollowCritic","PathAlignCritic","ConstraintCritic","GoalCritic", "GoalAngleCritic","ObstaclesCritic"]
       # ... (ObstaclesCritic, GoalCritic etc. remain same as before) ...
       ConstraintCritic:
         enabled: true
@@ -150,7 +151,7 @@ controller_server:
       PathAlignCritic:
         enabled: true
         cost_power: 1
-        cost_weight: 14.0
+        cost_weight: 5.0
         max_path_occupancy_ratio: 0.05
         trajectory_point_step: 3
         threshold_to_consider: 0.5
@@ -184,15 +185,15 @@ controller_server:
         enabled: true
         cost_power: 1
         repulsion_weight: 0.5  # LOW weight = Not afraid of walls (Mouse mode)
-        critical_weight: 50.0  # HIGH weight = But never hit them
+        critical_weight: 15.0  # HIGH weight = But never hit them
         near_goal_distance: 0.0
         consider_footprint: true
 
       PathFollowCritic:
         enabled: true
         cost_power: 1
-        cost_weight: 5.0
-        offset_from_furthest: 3
+        cost_weight: 20.0
+        offset_from_furthest: 4
         threshold_to_consider: 0.4
 
       PreferForwardCritic:
@@ -205,9 +206,9 @@ local_costmap:
   local_costmap:
     ros__parameters:
       update_frequency: 5.0
-      publish_frequency: 5.0
+      publish_frequency: 2.0
       transform_tolerance: 0.8
-      always_send_full_costmap: True
+      always_send_full_costmap: False
       global_frame: odom
       robot_base_frame: base_link
       use_sim_time: False

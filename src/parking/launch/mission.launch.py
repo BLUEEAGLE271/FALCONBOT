@@ -1,18 +1,39 @@
 import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription, TimerAction
+from launch.actions import IncludeLaunchDescription, TimerAction, OpaqueFunction
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.actions import Node
+import subprocess, psutil
 ##Bash commands
 ##colcon build --symlink-install   --allow-overriding cv_bridge image_geometry --parallel-workers 2
 ##source install/setup.bash
 ##ros2 launch parking mission.launch.py
+
+def pin_processes(context, *args, **kwargs):
+    for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
+        try:
+            cmd = ' '.join(proc.info['cmdline'] or [])
+            if 'controller_server' in cmd:
+                subprocess.run(['taskset', '-cp', '2,3,4,5', str(proc.pid)])
+            elif 'planner_server' in cmd:
+                subprocess.run(['taskset', '-cp', '2,3,4,5', str(proc.pid)])
+            elif 'slam_toolbox' in cmd:
+                subprocess.run(['taskset', '-cp', '0,1', str(proc.pid)])
+            elif 'rf2o' in cmd:
+                subprocess.run(['taskset', '-cp', '0,1', str(proc.pid)])
+            elif 'aruco' in cmd:
+                subprocess.run(['taskset', '-cp', '0,1', str(proc.pid)])
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            pass
+    return []
+
+
 def generate_launch_description():
     # --- PATHS ---
     lidar_pkg = get_package_share_directory('ldlidar_stl_ros2')
     nav2_pkg = get_package_share_directory('nav2_bringup')
-    slam_pkg = get_package_share_directory('slam_toolbox')
+    ##slam_pkg = get_package_share_directory('slam_toolbox')
     my_pkg = get_package_share_directory('parking')
 
     # --- 1. HARDWARE (Lidar + Camera + TF) ---
@@ -159,6 +180,8 @@ def generate_launch_description():
             'filter_alpha_small': 0.1
         }]
     )
+
+
     goal_masking_node = Node(
         package='parking',
         executable='goal_masking_node',
@@ -191,6 +214,13 @@ def generate_launch_description():
     output='screen'
     )
 
+    video_stream_node = Node(
+    package='web_video_server',
+    executable='web_video_server',
+    name='web_video_server',
+    )
+
+   
 
     return LaunchDescription([
         # 1. Start Transforms and Sensors immediately
@@ -203,7 +233,8 @@ def generate_launch_description():
         scan_republisher_node,
         goal_masking_node,
         velocity_controller_node,
-        video_streamer_node,
+        #video_streamer_node,
+        video_stream_node,
         
 
         
@@ -217,6 +248,7 @@ def generate_launch_description():
 
         # # 4. Wait 10s for Map to build, then start Nav2
         TimerAction(period=8.0, actions=[nav2_launch]),
+        TimerAction(period=15.0, actions=[OpaqueFunction(function=pin_processes)]),
 
         # # 5. Finally, start your logic
         TimerAction(period=25.0, actions=[

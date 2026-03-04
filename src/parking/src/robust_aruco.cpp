@@ -39,7 +39,7 @@ public:
         alpha_default_ = this->get_parameter("filter_alpha_default").as_double();
 
         // Best Effort QoS to handle potential frame drops smoothly
-        rclcpp::QoS qos_profile = rclcpp::SensorDataQoS();
+        rclcpp::QoS qos_profile = rclcpp::QoS(10).reliable();
 
         info_sub_ = this->create_subscription<sensor_msgs::msg::CameraInfo>(
             "/camera/camera_info", qos_profile, 
@@ -53,6 +53,12 @@ public:
         tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
 
         has_info_ = false;
+
+        cv::aruco::DetectorParameters detectorParams;
+        detectorParams.cornerRefinementMethod = cv::aruco::CORNER_REFINE_SUBPIX;
+        cv::aruco::Dictionary dictionary = cv::aruco::getPredefinedDictionary(cv::aruco::DICT_6X6_50);
+        detector_ = cv::aruco::ArucoDetector(dictionary, detectorParams);
+
         RCLCPP_INFO(this->get_logger(), "Robust ArUco: Quaternion Slerp Enabled.");
     }
 
@@ -83,12 +89,7 @@ private:
             std::vector<int> ids;
             std::vector<std::vector<cv::Point2f>> corners;
             
-            cv::aruco::DetectorParameters detectorParams = cv::aruco::DetectorParameters();
-            detectorParams.cornerRefinementMethod = cv::aruco::CORNER_REFINE_SUBPIX;
-            cv::aruco::Dictionary dictionary = cv::aruco::getPredefinedDictionary(cv::aruco::DICT_6X6_50);
-            cv::aruco::ArucoDetector detector(dictionary, detectorParams);
-            
-            detector.detectMarkers(cv_ptr->image, corners, ids);
+            detector_.detectMarkers(cv_ptr->image, corners, ids);
 
             if (!ids.empty()) {
                 cv::aruco::drawDetectedMarkers(cv_ptr->image, corners, ids);
@@ -156,7 +157,9 @@ private:
                     publish_marker_pose(tvec_final, q_final, msg->header, current_id);
                 }
             }
+            
             debug_pub_->publish(*cv_ptr->toImageMsg());
+    
         } catch (const std::exception& e) {
              RCLCPP_ERROR(this->get_logger(), "Callback Error: %s", e.what());
         } catch (...) {
@@ -224,7 +227,7 @@ private:
     
     // State storage
     std::map<int, MarkerFilter> filters_;
-
+    cv::aruco::ArucoDetector detector_;
     cv::Mat camera_matrix_, dist_coeffs_;
     bool has_info_;
     double default_size_, small_size_;

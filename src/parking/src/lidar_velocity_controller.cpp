@@ -232,7 +232,7 @@ private:
 
         if (std::abs(target_linear_) < 0.01) {
             integral_error_ = 0.0;
-            output_mps = 0.0;
+            //output_mps = 0.0;
         } else {
             // 1. Integral of the error (Required for the Sliding Surface)
             integral_error_ += error * dt;

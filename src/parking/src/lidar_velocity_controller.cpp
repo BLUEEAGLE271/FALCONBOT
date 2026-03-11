@@ -32,10 +32,10 @@ public:
         this->declare_parameter("smc_lambda", 2.0);
         this->declare_parameter("smc_k", 0.6);
         this->declare_parameter("smc_phi", 0.15);
-        this->declare_parameter("kp_v", 1.0);
+        this->declare_parameter("kp_v", 7.0);
         this->declare_parameter("ki_v", 0.0);
         this->declare_parameter("kd_v", 0.0);
-        this->declare_parameter("kp_w", 1.0);
+        this->declare_parameter("kp_w", 3.0);
         this->declare_parameter("ki_w", 0.0);
         this->declare_parameter("kd_w", 0.0);
 
@@ -341,7 +341,8 @@ private:
             double error_v = target_linear_ - current_linear_;
             integral_v_ += error_v * dt;
             // Anti-windup cap
-            if (integral_v_ > 2.0) integral_v_ = 2.0; if (integral_v_ < -2.0) integral_v_ = -2.0;
+            if (integral_v_ > 2.0) {integral_v_ = 2.0; }
+            if (integral_v_ < -2.0) {integral_v_ = -2.0;}
             
             double deriv_v = (error_v - prev_error_v_) / dt;
             double pid_v = (kp_v_ * error_v) + (ki_v_ * integral_v_) + (kd_v_ * deriv_v);
@@ -350,7 +351,8 @@ private:
             double error_w = target_angular_ - current_angular_;
             integral_w_ += error_w * dt;
             // Anti-windup cap
-            if (integral_w_ > 2.0) integral_w_ = 2.0; if (integral_w_ < -2.0) integral_w_ = -2.0;
+            if (integral_w_ > 2.0) {integral_w_ = 2.0; }
+            if (integral_w_ < -2.0) {integral_w_ = -2.0; }
 
             double deriv_w = (error_w - prev_error_w_) / dt;
             double pid_w = (kp_w_ * error_w) + (ki_w_ * integral_w_) + (kd_w_ * deriv_w);

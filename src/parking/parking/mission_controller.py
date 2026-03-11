@@ -4,6 +4,7 @@ from rclpy.node import Node
 from rclpy.action import ActionClient
 from geometry_msgs.msg import PoseStamped
 from std_msgs.msg import Bool  # <--- FIXED: Added missing import
+from std_msgs.msg import Empty
 from nav2_msgs.action import NavigateToPose
 import threading
 import sys
@@ -25,7 +26,7 @@ class MissionController(Node):
         self.get_logger().info("MISSION READY. Press 's' to start, 'x' to abort.")
         # --- ROS HANDLES ---
         self.nav_client = ActionClient(self, NavigateToPose, 'navigate_to_pose')
-
+        self.start_sub = self.create_subscription(Empty, 'start_mission', self.start_callback, 10)
         self.create_subscription(PoseStamped, '/goal_pose', self.box_callback, 10)
         self.create_subscription(Bool, '/mission/trigger', self.trigger_callback, 10)
         self.create_subscription(PoseStamped, '/exploration_goal', self.explore_callback, 10)
@@ -60,7 +61,9 @@ class MissionController(Node):
         else:
             self.get_logger().warn(">>> MISSION ABORTED <<<")
             self.cancel_navigation()
-
+    def start_callback(self, msg):
+        self.get_logger().info('Start signal received! Commencing mission...')
+        self.state = "SEARCHING" # or whatever starts your logic
     def cancel_navigation(self):
         # 1. Stop the Logic Brain (Ignore new goals)
         self.mission_active = False

@@ -5,7 +5,7 @@
       
       <PipelineSequence name="DynamicFollowing">
         
-        <RateController hz="2.0">
+        <RateController hz="1.0">
           <ComputePathToPose goal="{updated_goal}" path="{path}" planner_id="GridBased"/>
         </RateController>
         

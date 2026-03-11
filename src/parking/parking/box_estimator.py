@@ -10,6 +10,7 @@ import tf_transformations as tft
 import numpy as np
 import math
 from collections import deque
+from std_msgs.msg import Bool  # <--- MUST BE HERE
 from geometry_msgs.msg import PoseStamped, Polygon, Point32
 
 class BoxEstimator(Node):
@@ -58,8 +59,28 @@ class BoxEstimator(Node):
                 10
             )
             self.subs.append(sub)
+        self.mission_active = False
+        self.start_sub = self.create_subscription(
+            Bool, 
+            '/start_mission', 
+            self.start_callback, 
+            10
+        )
         
         self.get_logger().info("Box Estimator Ready [DEBUG MODE]")
+    
+    def detection_callback(self, msg, m_id):
+        if not self.mission_active:
+            return  # Ignore all markers until mission starts
+        self.solve_box_pose(msg, m_id)
+    
+    def start_callback(self, msg):
+        if msg.data is True:
+            self.get_logger().info("✅ MISSION ACTIVE: Box Estimator now processing markers.")
+            self.mission_active = True
+        else:
+            self.get_logger().info("🛑 MISSION DEACTIVATED: Stopping goal updates.")
+            self.mission_active = False
 
     def setup_box_geometry(self):
         def make_mat(pos, x_vec, y_vec, z_vec):
@@ -105,10 +126,6 @@ class BoxEstimator(Node):
             [-1, 0, 0]                 # Marker Z aligns with Box X (Front)
         )
 
-
-
-    def detection_callback(self, msg, m_id):
-        self.solve_box_pose(msg, m_id)
 
     def solve_box_pose(self, pose_msg, m_id):
         try:

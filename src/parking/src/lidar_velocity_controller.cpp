@@ -11,10 +11,13 @@
 #include <fstream> // Required for file saving
 #include "rclcpp/rclcpp.hpp"
 #include "geometry_msgs/msg/twist.hpp"
+#include "std_msgs/msg/string.hpp"
 #include "std_msgs/msg/bool.hpp"
 #include "nav_msgs/msg/odometry.hpp"
 #include "sensor_msgs/msg/imu.hpp" // NEW: Required for IMU
+#include <nlohmann/json.hpp>
 
+using json = nlohmann::json;
 using namespace std::chrono_literals;
 using std::placeholders::_1;
 
@@ -29,6 +32,31 @@ public:
         this->declare_parameter("smc_lambda", 2.0);
         this->declare_parameter("smc_k", 0.6);
         this->declare_parameter("smc_phi", 0.15);
+        this->declare_parameter("kp_v", 1.0);
+        this->declare_parameter("ki_v", 0.0);
+        this->declare_parameter("kd_v", 0.0);
+        this->declare_parameter("kp_w", 1.0);
+        this->declare_parameter("ki_w", 0.0);
+        this->declare_parameter("kd_w", 0.0);
+
+        update_pid_params();
+
+        parameter_callback_handle_ = this->add_on_set_parameters_callback(
+            [this](const std::vector<rclcpp::Parameter> &parameters) {
+                rcl_interfaces::msg::SetParametersResult result;
+                result.successful = true;
+                for (const auto &param : parameters) {
+                    if (param.get_name() == "kp_v") kp_v_ = param.as_double();
+                    if (param.get_name() == "ki_v") ki_v_ = param.as_double();
+                    if (param.get_name() == "kd_v") kd_v_ = param.as_double();
+                    if (param.get_name() == "kp_w") kp_w_ = param.as_double();
+                    if (param.get_name() == "ki_w") ki_w_ = param.as_double();
+                    if (param.get_name() == "kd_w") kd_w_ = param.as_double();
+                }
+                return result;
+            });
+        
+        
 
         max_speed_ = this->get_parameter("max_linear_speed").as_double();
         smc_lambda_ = this->get_parameter("smc_lambda").as_double();
@@ -36,6 +64,8 @@ public:
         smc_phi_ = this->get_parameter("smc_phi").as_double();
         load_smc_from_file();
         std::string port = this->get_parameter("serial_port").as_string();
+
+        load_nn_weights("/home/blueeagle/ros2_ws/nn_weights.json");
 
         // --- SERIAL SETUP ---
         if (!setupSerial(port)) {
@@ -49,7 +79,13 @@ public:
 
         odom_sub_ = this->create_subscription<nav_msgs::msg::Odometry>(
             "odom_rf2o", 10, std::bind(&LidarVelocityController::odom_callback, this, _1));
-
+        raw_serial_sub_ = this->create_subscription<std_msgs::msg::String>(
+            "/esp32_write", 10, [this](const std_msgs::msg::String::SharedPtr msg) {
+                if (serial_fd_ != -1) {
+                    write(serial_fd_, msg->data.c_str(), msg->data.length());
+                    write(serial_fd_, "\n", 1); // Ensure newline termination
+                }
+            });
         // --- NEW: IMU PUBLISHER ---
         imu_pub_ = this->create_publisher<sensor_msgs::msg::Imu>("/imu/data", 10);
         
@@ -80,7 +116,16 @@ private:
     double integral_error_ = 0.0;
     double max_speed_;
     double smc_lambda_, smc_k_, smc_phi_; // New SMC Variables
+    double kp_v_, ki_v_, kd_v_;
+    double kp_w_, ki_w_, kd_w_;
+    double integral_v_ = 0.0, prev_error_v_ = 0.0;
+    double integral_w_ = 0.0, prev_error_w_ = 0.0;
+    OnSetParametersCallbackHandle::SharedPtr parameter_callback_handle_;
     rclcpp::Time last_time_;
+
+    //Neutral network
+    std::vector<std::vector<double>> w1_, w2_, w3_;
+    std::vector<double> b1_, b2_, b3_;
     
     // Buffer for storing incoming serial bytes until we find a newline
     std::string serial_buffer_ = ""; 
@@ -88,10 +133,53 @@ private:
     // --- ROS HANDLES ---
     rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_sub_;
     rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
+    rclcpp::Subscription<std_msgs::msg::String>::SharedPtr raw_serial_sub_;
     rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr imu_pub_;
     rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr mission_trigger_pub_;
     rclcpp::TimerBase::SharedPtr control_timer_;
     rclcpp::TimerBase::SharedPtr read_timer_;
+
+    void update_pid_params() {
+        kp_v_ = this->get_parameter("kp_v").as_double();
+        ki_v_ = this->get_parameter("ki_v").as_double();
+        kd_v_ = this->get_parameter("kd_v").as_double();
+        kp_w_ = this->get_parameter("kp_w").as_double();
+        ki_w_ = this->get_parameter("ki_w").as_double();
+        kd_w_ = this->get_parameter("kd_w").as_double();
+    }
+
+    std::vector<double> relu(const std::vector<double>& x) {
+        std::vector<double> out = x;
+        for (auto& val : out) if (val < 0.0) val = 0.0;
+        return out;
+    }
+
+    std::vector<double> matmul_add(const std::vector<std::vector<double>>& W, const std::vector<double>& x, const std::vector<double>& b) {
+        std::vector<double> out(b.size(), 0.0);
+        for (size_t i = 0; i < W.size(); ++i) {
+            for (size_t j = 0; j < x.size(); ++j) {
+                out[i] += W[i][j] * x[j];
+            }
+            out[i] += b[i];
+        }
+        return out;
+    }
+
+    void load_nn_weights(const std::string& filepath) {
+        std::ifstream f(filepath);
+        if (!f.is_open()) {
+            RCLCPP_ERROR(this->get_logger(), "CRITICAL: Could not find nn_weights.json!");
+            return;
+        }
+        json data = json::parse(f);
+        w1_ = data["w1"].get<std::vector<std::vector<double>>>();
+        b1_ = data["b1"].get<std::vector<double>>();
+        w2_ = data["w2"].get<std::vector<std::vector<double>>>();
+        b2_ = data["b2"].get<std::vector<double>>();
+        w3_ = data["w3"].get<std::vector<std::vector<double>>>();
+        b3_ = data["b3"].get<std::vector<double>>();
+        RCLCPP_INFO(this->get_logger(), "Neural Network Weights Loaded Successfully!");
+    }
 
     // --- SERIAL SETUP ---
     bool setupSerial(const std::string &port) {
@@ -223,45 +311,61 @@ private:
         double dt = (now - last_time_).seconds();
         last_time_ = now;
 
+        double final_pwm_left = 0.0;
+        double final_pwm_right = 0.0;
+
+
         double error = target_linear_ - current_linear_;
         double output_mps = 0.0; 
 
         // --- SMC TUNING PARAMETERS ---
         // (You can later move these to your declare_parameter block)
-        ;         // Boundary Layer Thickness (smooths out the 20Hz chatter)
+                 // Boundary Layer Thickness (smooths out the 20Hz chatter)
 
-        if (std::abs(target_linear_) < 0.01) {
-            integral_error_ = 0.0;
-            //output_mps = 0.0;
+        if (std::abs(target_linear_) < 0.01 && std::abs(target_angular_) < 0.01) {
+            integral_v_ = 0.0;
+            integral_w_ = 0.0;
+            prev_error_v_ = 0.0;
+            prev_error_w_ = 0.0;
         } else {
-            // 1. Integral of the error (Required for the Sliding Surface)
-            integral_error_ += error * dt;
-            // Cap it slightly higher to allow for sustained pushing during tight turns
-            if (integral_error_ > 1.0) integral_error_ = 1.0;
-            if (integral_error_ < -1.0) integral_error_ = -1.0;
-
-            // 2. Define the Sliding Surface (s)
-            double s = error + (smc_lambda_ * integral_error_);
-
-            // 3. The Saturation Function (Creates the Boundary Layer)
-            double sat_s = s / smc_phi_;
-            if (sat_s > 1.0) sat_s = 1.0;
-            if (sat_s < -1.0) sat_s = -1.0;
-
-            // 4. Equivalent Control (Feedforward) + Switching Control
-            double u_eq = target_linear_; 
+            // --- 1. NEURAL NETWORK FEED-FORWARD ---
+            std::vector<double> inputs = {target_linear_, target_angular_};
+            auto h1 = relu(matmul_add(w1_, inputs, b1_));
+            auto h2 = relu(matmul_add(w2_, h1, b2_));
+            auto y = matmul_add(w3_, h2, b3_);
             
-            // Dynamic Turn Compensation: Add more power if we are turning
-            double turn_friction_boost = std::abs(target_angular_) * 0.05;
-            u_eq += (target_linear_ > 0 ? turn_friction_boost : -turn_friction_boost);
+            double ff_left = y[0] * 255.0;
+            double ff_right = y[1] * 255.0;
 
-            // Final Output Calculation
-            output_mps = u_eq + (smc_k_ * sat_s);
+            // --- 2. PID CORRECTIVE TRIM ---
+            double error_v = target_linear_ - current_linear_;
+            integral_v_ += error_v * dt;
+            // Anti-windup cap
+            if (integral_v_ > 2.0) integral_v_ = 2.0; if (integral_v_ < -2.0) integral_v_ = -2.0;
+            
+            double deriv_v = (error_v - prev_error_v_) / dt;
+            double pid_v = (kp_v_ * error_v) + (ki_v_ * integral_v_) + (kd_v_ * deriv_v);
+            prev_error_v_ = error_v;
+
+            double error_w = target_angular_ - current_angular_;
+            integral_w_ += error_w * dt;
+            // Anti-windup cap
+            if (integral_w_ > 2.0) integral_w_ = 2.0; if (integral_w_ < -2.0) integral_w_ = -2.0;
+
+            double deriv_w = (error_w - prev_error_w_) / dt;
+            double pid_w = (kp_w_ * error_w) + (ki_w_ * integral_w_) + (kd_w_ * deriv_w);
+            prev_error_w_ = error_w;
+
+            // --- 3. THE MIXER ---
+            final_pwm_left = ff_left + pid_v - pid_w;
+            final_pwm_right = ff_right + pid_v + pid_w;
+
+            // Clamp hardware limits
+            if (final_pwm_left > 255.0) final_pwm_left = 255.0;
+            if (final_pwm_left < -255.0) final_pwm_left = -255.0;
+            if (final_pwm_right > 255.0) final_pwm_right = 255.0;
+            if (final_pwm_right < -255.0) final_pwm_right = -255.0;
         }
-
-        // Hardware safety limits
-        if (output_mps > max_speed_) output_mps = max_speed_;
-        if (output_mps < -max_speed_) output_mps = -max_speed_;
 
         // DEBUG PRINT: Placed AFTER math to show the true output
         /* RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 50, 
@@ -275,12 +379,17 @@ private:
         } */
 
         char buffer[64];
-        int len = snprintf(buffer, sizeof(buffer), "{\"T\":5,\"L\":%.3f,\"A\":%.3f}\n", 
-                           output_mps, target_angular_);
+        int len = snprintf(buffer, sizeof(buffer), "{\"T\":11,\"L\":%.0f,\"R\":%.0f}\n", 
+                        final_pwm_left, final_pwm_right);
 
-        if (serial_fd_ != -1) {
+        // Only send if there's actually a command, OR if we need to send a stop command once
+        static bool last_was_zero = false;
+        bool current_is_zero = (std::abs(final_pwm_left) < 1.0 && std::abs(final_pwm_right) < 1.0);
+
+        if (serial_fd_ != -1 && (!current_is_zero || !last_was_zero)) {
             write(serial_fd_, buffer, len);
         }
+        last_was_zero = current_is_zero;
     }
 };
 

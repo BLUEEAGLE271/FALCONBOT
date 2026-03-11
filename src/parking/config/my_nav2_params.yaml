@@ -102,7 +102,7 @@ controller_server:
       trajectory_point_step: 1
       model_dt: 0.05
       publish_optimal_trajectory: true
-      visualize: true
+      visualize: false
       batch_size: 600
       use_sim_time: False
       gamma: 0.015

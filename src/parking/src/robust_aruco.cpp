@@ -29,10 +29,12 @@ public:
         // Lower Alpha = SMOOTHER but slower (0.1 = 10% new, 90% old)
         this->declare_parameter("filter_alpha_small", 0.1); 
         this->declare_parameter("filter_alpha_default", 0.3);
+        this->declare_parameter("process_every_n_frames", 3);
 
         default_size_ = this->get_parameter("marker_size_default").as_double();
         small_size_ = this->get_parameter("marker_size_small").as_double();
         small_id_ = this->get_parameter("small_marker_id").as_int();
+        
         target_id_ = this->get_parameter("target_id").as_int();
         camera_frame_ = this->get_parameter("camera_frame").as_string();
         alpha_small_ = this->get_parameter("filter_alpha_small").as_double();
@@ -63,6 +65,9 @@ public:
     }
 
 private:
+    int frame_counter_ = 0; // Tracks frames for skipping
+    int process_every_n_frames_;
+
     void info_callback(const sensor_msgs::msg::CameraInfo::SharedPtr msg) {
         if (has_info_) return;
         camera_matrix_ = cv::Mat(3, 3, CV_64F);
@@ -78,7 +83,7 @@ private:
 
             cv_bridge::CvImagePtr cv_ptr;
             try {
-                cv_ptr = cv_bridge::toCvCopy(msg, sensor_msgs::image_encodings::BGR8);
+                cv_ptr = cv_bridge::toCvCopy(msg, sensor_msgs::image_encodings::MONO8);
             } catch (cv_bridge::Exception& e) {
                 RCLCPP_ERROR(this->get_logger(), "cv_bridge exception: %s", e.what());
                 return;
@@ -117,7 +122,7 @@ private:
                     
                     // 1. Solver: IPPE_SQUARE is safest for flat markers
                     cv::solvePnP(objPoints, corners[i], camera_matrix_, dist_coeffs_, rvec_raw, tvec_raw, false, cv::SOLVEPNP_IPPE_SQUARE);
-
+                    cv::drawFrameAxes(cv_ptr->image, camera_matrix_, dist_coeffs_, rvec_raw, tvec_raw, current_size);
                     // --- FILTERING LOGIC ---
                     if (filters_.find(current_id) == filters_.end()) {
                         filters_[current_id] = MarkerFilter();

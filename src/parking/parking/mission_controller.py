@@ -5,6 +5,11 @@ from rclpy.action import ActionClient
 from geometry_msgs.msg import PoseStamped
 from std_msgs.msg import Bool  # <--- FIXED: Added missing import
 from nav2_msgs.action import NavigateToPose
+import threading
+import sys
+import select
+import termios
+import tty
 
 class MissionController(Node):
     def __init__(self):
@@ -16,9 +21,8 @@ class MissionController(Node):
         
         # --- AUTO-START CONFIGURATION ---
         # Set this to True so it runs immediately on launch without waiting for button
-        self.mission_active = True 
-        self.get_logger().info("MISSION: Auto-Start Active! Waiting for exploration goals...")
-
+        self.mission_active = False 
+        self.get_logger().info("MISSION READY. Press 's' to start, 'x' to abort.")
         # --- ROS HANDLES ---
         self.nav_client = ActionClient(self, NavigateToPose, 'navigate_to_pose')
 
@@ -26,6 +30,28 @@ class MissionController(Node):
         self.create_subscription(Bool, '/mission/trigger', self.trigger_callback, 10)
         self.create_subscription(PoseStamped, '/exploration_goal', self.explore_callback, 10)
 
+        threading.Thread(target=self.terminal_listener, daemon=True).start()
+    
+    def terminal_listener(self):
+        # Save current terminal settings
+        old_settings = termios.tcgetattr(sys.stdin)
+        try:
+            # Set terminal to read single characters instantly
+            tty.setcbreak(sys.stdin.fileno())
+            while True:
+                if select.select([sys.stdin], [], [], 0.1)[0]:
+                    char = sys.stdin.read(1).lower()
+                    
+                    if char == 's':
+                        if not self.mission_active:
+                            self.get_logger().info("\n\n>>> [KEYBOARD] STARTING MISSION! <<<\n")
+                            self.mission_active = True
+                            self.box_found = False
+                    elif char == 'x':
+                        self.get_logger().warn("\n\n>>> [KEYBOARD] ABORTING MISSION & STOPPING ROBOT! <<<\n")
+                        self.cancel_navigation()
+        finally:
+            termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
     def trigger_callback(self, msg):
         if msg.data == True:
             self.get_logger().info(">>> MISSION RE-STARTED <<<")

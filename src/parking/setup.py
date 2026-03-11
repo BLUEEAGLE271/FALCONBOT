@@ -28,7 +28,8 @@ setup(
         'console_scripts': [
             'rectified_parking = parking.rectified_parking:main',
             'box_estimator = parking.box_estimator:main',
-            'mission_controller = parking.mission_controller:main'
+            'mission_controller = parking.mission_controller:main',
+            'pwm_data_collector = parking.pwm_data_collector:main'
         ],
     },
 )

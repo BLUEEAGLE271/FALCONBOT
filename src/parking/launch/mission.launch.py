@@ -244,17 +244,17 @@ def generate_launch_description():
         TimerAction(period=4.0, actions=[robot_localization_node]),
 
         # 3. Wait 5s for Odom to stabilize, then start SLAM
-         TimerAction(period=6.0, actions=[slam_node]),
+        #  TimerAction(period=6.0, actions=[slam_node]),
 
-        # # 4. Wait 10s for Map to build, then start Nav2
-        TimerAction(period=8.0, actions=[nav2_launch]),
-        TimerAction(period=15.0, actions=[OpaqueFunction(function=pin_processes)]),
+        # # # 4. Wait 10s for Map to build, then start Nav2
+        # TimerAction(period=8.0, actions=[nav2_launch]),
+        # TimerAction(period=15.0, actions=[OpaqueFunction(function=pin_processes)]),
 
-        # # 5. Finally, start your logic
-        TimerAction(period=25.0, actions=[
-            mission_control_node,
-            box_estimator_node,
-        #     #explore_node
-         ])
+        # # # 5. Finally, start your logic
+        # TimerAction(period=25.0, actions=[
+        #     mission_control_node,
+        #     box_estimator_node,
+        # #     #explore_node
+        # ])
     ])
 

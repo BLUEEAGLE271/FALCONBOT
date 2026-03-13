@@ -251,7 +251,7 @@ def generate_launch_description():
         TimerAction(period=15.0, actions=[OpaqueFunction(function=pin_processes)]),
 
         # # # 5. Finally, start your logic
-        TimerAction(period=25.0, actions=[
+        TimerAction(period=35.0, actions=[
              mission_control_node,
              box_estimator_node,
              #explore_node

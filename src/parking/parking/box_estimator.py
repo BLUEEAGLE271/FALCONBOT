@@ -22,7 +22,7 @@ class BoxEstimator(Node):
         self.BOX_WIDTH  = 0.20   
         self.half_L = self.BOX_LENGTH / 2.0
         self.half_W = self.BOX_WIDTH / 2.0
-        self.APPROACH_DIST = 0.4 
+        self.APPROACH_DIST = 0.3 
         
         self.target_ids = [0, 1, 2, 3]
         self.navigation_started = False 
@@ -33,7 +33,7 @@ class BoxEstimator(Node):
         self.setup_box_geometry()
 
         # --- FILTERING ---
-        self.filter_size = 5 
+        self.filter_size = 10 
         self.pose_history = {} 
 
         # --- ROS SETUP ---
@@ -77,10 +77,26 @@ class BoxEstimator(Node):
     def start_callback(self, msg):
         if msg.data is True:
             self.get_logger().info("✅ MISSION ACTIVE: Box Estimator now processing markers.")
+            self.navigation_started = False
+            self.footprint_shrunk = False
             self.mission_active = True
         else:
             self.get_logger().info("🛑 MISSION DEACTIVATED: Stopping goal updates.")
             self.mission_active = False
+            self.restore_footprint() # Optional: Give the robot its "shields" back
+            
+    def restore_footprint(self):
+        # Restore the original footprint dimensions so you don't crash 
+        # while manually driving after an abort.
+        poly = Polygon()
+        # Use your actual robot dimensions here (from your YAML)
+        normal_points = [[-0.097, -0.084], [-0.097, 0.084], [0.097, 0.084], [0.097, -0.084]]
+        for p in normal_points:
+            pt = Point32()
+            pt.x, pt.y = float(p[0]), float(p[1])
+            poly.points.append(pt)
+        self.local_footprint_pub.publish(poly)
+        self.global_footprint_pub.publish(poly)
 
     def setup_box_geometry(self):
         def make_mat(pos, x_vec, y_vec, z_vec):
@@ -139,7 +155,7 @@ class BoxEstimator(Node):
             # 2. Map -> Camera
             try:
                 tf_stamped = self.tf_buffer.lookup_transform(
-                    'odom', pose_msg.header.frame_id, rclpy.time.Time()
+                    'map', pose_msg.header.frame_id, rclpy.time.Time()
                 )
             except (LookupException, ConnectivityException, ExtrapolationException):
                 return
@@ -194,7 +210,7 @@ class BoxEstimator(Node):
     def publish_box_pose(self, x, y, yaw):
         msg = PoseStamped()
         msg.header.stamp = self.get_clock().now().to_msg()
-        msg.header.frame_id = "odom"
+        msg.header.frame_id = "map"
         msg.pose.position.x = x
         msg.pose.position.y = y
         q = tft.quaternion_from_euler(0, 0, yaw)
@@ -209,7 +225,7 @@ class BoxEstimator(Node):
         
         # RED ARROW = Box X Axis (Front)
         m1 = Marker()
-        m1.header.frame_id = "odom"
+        m1.header.frame_id = "map"
         m1.header.stamp = self.get_clock().now().to_msg()
         m1.id = 0
         m1.type = Marker.ARROW
@@ -228,7 +244,7 @@ class BoxEstimator(Node):
 
         # GREEN ARROW = Box Y Axis (Left)
         m2 = Marker()
-        m2.header.frame_id = "odom"
+        m2.header.frame_id = "map"
         m2.header.stamp = self.get_clock().now().to_msg()
         m2.id = 1
         m2.type = Marker.ARROW
@@ -266,7 +282,7 @@ class BoxEstimator(Node):
     def execute_dynamic_goal(self, x, y, yaw, robot_x, robot_y):
         goal_msg = PoseStamped()
         goal_msg.header.stamp = self.get_clock().now().to_msg()
-        goal_msg.header.frame_id = "odom"
+        goal_msg.header.frame_id = "map"
         goal_msg.pose.position.x = x
         goal_msg.pose.position.y = y
         q = tft.quaternion_from_euler(0, 0, yaw)

@@ -295,20 +295,20 @@ planner_server:
       tolerance: 0.0
       use_final_approach_orientation: true
       allow_unknown: true
-      max_iterations: 1000000
-      max_on_approach_iterations: 1000
+      max_iterations: 500000
+      max_on_approach_iterations: 900
       max_planning_time: 3.0
-      motion_model_for_search: "REEDS_SHEPP" # <--- "DUBIN" = Forward Only (No Reversing)
+      motion_model_for_search: "DUBIN" # <--- "DUBIN" = Forward Only (No Reversing)
       non_straight_penalty: 1.2        # (Was 1.2) Punish turning
       cost_travel_multiplier: 5.0     # (Was 2.0) Punish long paths (loops are long)
-      change_penalty: 100.0              # Punish changing from straight to turn
+      change_penalty: 10.0              # Punish changing from straight to turn
       retrospective_penalty: 0.0
       orientation_penalty: 10.0
       analytic_expansion_ratio: 3.5 
       analytic_expansion_max_length: 2.5
       angle_quantization_bins: 144
-      minimum_turning_radius: 0.7     # <--- MUST match your controller's radius
-      reverse_penalty: 5.0
+      minimum_turning_radius: 0.4     # <--- MUST match your controller's radius
+      reverse_penalty: 50.0
       
       
       

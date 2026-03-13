@@ -22,7 +22,7 @@ class BoxEstimator(Node):
         self.BOX_WIDTH  = 0.20   
         self.half_L = self.BOX_LENGTH / 2.0
         self.half_W = self.BOX_WIDTH / 2.0
-        self.APPROACH_DIST = 0.1 
+        self.APPROACH_DIST = 0.4 
         
         self.target_ids = [0, 1, 2, 3]
         self.navigation_started = False 
@@ -283,7 +283,7 @@ class BoxEstimator(Node):
         if distance_to_goal < 0.10:
             # We are close enough. Stop sending updates so MPPI can park smoothly without jitter.
             return
-        if distance_to_goal < 0.25 and not self.footprint_shrunk:
+        if distance_to_goal < 0.4 and not self.footprint_shrunk:
             self.get_logger().info(f"Target is {distance_to_goal:.2f}m away! Dropping shields and shrinking footprint.")
             self.shrink_footprint()
             self.footprint_shrunk = True
@@ -296,8 +296,14 @@ class BoxEstimator(Node):
                 self.navigation_started = True
                 self.get_logger().info("Initial Action Goal Sent. Switching to dynamic topic updates.")
         else:
-            # PHASE 2
-            self.update_pub.publish(goal_msg)
+            # PHASE 2: Only update the goal if we are further than 0.5m away
+            if distance_to_goal > 0.5:
+                self.update_pub.publish(goal_msg)
+            else:
+                # We are closer than 0.5m. Do NOTHING. 
+                # This starves the GoalUpdatedController, forcing the robot 
+                # to just finish driving the exact path it already has.
+                pass
     
     def send_nav2_goal(self, pose_stamped):
         self.get_logger().info("🚀 SENDING GOAL TO NAV2...")

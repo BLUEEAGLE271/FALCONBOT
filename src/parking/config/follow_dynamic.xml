@@ -3,15 +3,21 @@
     
     <GoalUpdater input_goal="{goal}" output_goal="{updated_goal}">
       
-      <PipelineSequence name="DynamicFollowing">
+      <RecoveryNode number_of_retries="6" name="NavigateRecovery">
         
-        <RateController hz="1.0">
-          <ComputePathToPose goal="{updated_goal}" path="{path}" planner_id="GridBased"/>
-        </RateController>
-        
-        <FollowPath path="{path}" controller_id="FollowPath"/>
-        
-      </PipelineSequence>
+        <PipelineSequence name="DynamicFollowing">
+          
+          <GoalUpdatedController>
+            <ComputePathToPose goal="{updated_goal}" path="{path}" planner_id="GridBased"/>
+          </GoalUpdatedController>
+          
+          <FollowPath path="{path}" controller_id="FollowPath"/>
+          
+        </PipelineSequence>
+
+        <ComputePathToPose goal="{updated_goal}" path="{path}" planner_id="GridBased"/>
+
+      </RecoveryNode>
       
     </GoalUpdater>
     

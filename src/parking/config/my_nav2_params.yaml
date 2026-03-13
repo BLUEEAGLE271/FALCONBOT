@@ -300,9 +300,10 @@ planner_server:
       max_planning_time: 3.0
       motion_model_for_search: "REEDS_SHEPP" # <--- "DUBIN" = Forward Only (No Reversing)
       non_straight_penalty: 1.2        # (Was 1.2) Punish turning
-      cost_travel_multiplier: 2.0     # (Was 2.0) Punish long paths (loops are long)
+      cost_travel_multiplier: 5.0     # (Was 2.0) Punish long paths (loops are long)
       change_penalty: 100.0              # Punish changing from straight to turn
       retrospective_penalty: 0.0
+      orientation_penalty: 10.0
       analytic_expansion_ratio: 3.5 
       analytic_expansion_max_length: 2.5
       angle_quantization_bins: 144

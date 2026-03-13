@@ -184,7 +184,7 @@ controller_server:
       ObstaclesCritic:
         enabled: true
         cost_power: 1
-        repulsion_weight: 0.5  # LOW weight = Not afraid of walls (Mouse mode)
+        repulsion_weight: 0.5 # LOW weight = Not afraid of walls (Mouse mode)
         critical_weight: 15.0  # HIGH weight = But never hit them
         near_goal_distance: 0.0
         consider_footprint: true
@@ -303,7 +303,6 @@ planner_server:
       cost_travel_multiplier: 5.0     # (Was 2.0) Punish long paths (loops are long)
       change_penalty: 10.0              # Punish changing from straight to turn
       retrospective_penalty: 0.0
-      orientation_penalty: 10.0
       analytic_expansion_ratio: 3.5 
       analytic_expansion_max_length: 2.5
       angle_quantization_bins: 144

@@ -92,7 +92,7 @@ controller_server:
     general_goal_checker:
       stateful: True
       plugin: "nav2_controller::SimpleGoalChecker"
-      xy_goal_tolerance: 0.08
+      xy_goal_tolerance: 0.04
       yaw_goal_tolerance: 0.3
 
     FollowPath:
@@ -151,7 +151,7 @@ controller_server:
       PathAlignCritic:
         enabled: true
         cost_power: 1
-        cost_weight: 15.0
+        cost_weight: 40.0
         max_path_occupancy_ratio: 0.05
         trajectory_point_step: 3
         threshold_to_consider: 0.5
@@ -172,14 +172,14 @@ controller_server:
       GoalAngleCritic:
         enabled: true
         cost_power: 1
-        cost_weight: 30.0   # How strongly it cares about the final angle
-        threshold_to_consider: 0.4 # Only start worrying about the angle when within 0.5m of the goal
+        cost_weight: 10.0   # How strongly it cares about the final angle
+        threshold_to_consider: 0.3 # Only start worrying about the angle when within 0.5m of the goal
 
       GoalCritic:
         enabled: true
         cost_power: 1
-        cost_weight: 30.0
-        threshold_to_consider: 0.4
+        cost_weight: 10.0
+        threshold_to_consider: 0.3
 
       ObstaclesCritic:
         enabled: true
@@ -298,16 +298,16 @@ planner_server:
       max_iterations: 1000000
       max_on_approach_iterations: 1000
       max_planning_time: 3.0
-      motion_model_for_search: "DUBIN" # <--- "DUBIN" = Forward Only (No Reversing)
-      non_straight_penalty: 1.8        # (Was 1.2) Punish turning
+      motion_model_for_search: "REEDS_SHEPP" # <--- "DUBIN" = Forward Only (No Reversing)
+      non_straight_penalty: 1.2        # (Was 1.2) Punish turning
       cost_travel_multiplier: 2.0     # (Was 2.0) Punish long paths (loops are long)
-      change_penalty: 50.0              # Punish changing from straight to turn
+      change_penalty: 100.0              # Punish changing from straight to turn
       retrospective_penalty: 0.0
       analytic_expansion_ratio: 3.5 
       analytic_expansion_max_length: 2.5
       angle_quantization_bins: 144
-      minimum_turning_radius: 0.2     # <--- MUST match your controller's radius
-      reverse_penalty: 1000.0
+      minimum_turning_radius: 0.7     # <--- MUST match your controller's radius
+      reverse_penalty: 5.0
       
       
       

@@ -5,6 +5,7 @@ from rclpy.action import ActionClient
 from nav2_msgs.action import NavigateToPose
 from geometry_msgs.msg import PoseStamped
 from visualization_msgs.msg import Marker, MarkerArray # <--- Added for Axes
+from nav2_msgs.msg import SpeedLimit
 from tf2_ros import Buffer, TransformListener, LookupException, ConnectivityException, ExtrapolationException
 import tf_transformations as tft
 import numpy as np
@@ -36,6 +37,11 @@ class BoxEstimator(Node):
         self.filter_size = 5 
         self.pose_history = {} 
 
+        self.precision_mode = False
+        self.docking_locked = False
+        self.precision_buffer = []
+        self.last_detection_time = {}
+
         # --- ROS SETUP ---
         self.nav_client = ActionClient(self, NavigateToPose, 'navigate_to_pose')
         
@@ -43,6 +49,7 @@ class BoxEstimator(Node):
         self.mask_pub = self.create_publisher(PoseStamped, '/parking_goal', 10)
         self.box_pub = self.create_publisher(PoseStamped, '/box_center_pose', 10) # <--- You asked for this
         self.viz_pub = self.create_publisher(MarkerArray, '/box_debug_axes', 10)  # <--- NEW DEBUG VISUALIZER
+        self.speed_limit_pub = self.create_publisher(SpeedLimit, '/speed_limit', 10) # <--- Speed Controller
         self.local_footprint_pub = self.create_publisher(Polygon, '/local_costmap/footprint', 10)
         self.global_footprint_pub = self.create_publisher(Polygon, '/global_costmap/footprint', 10)
         self.tf_buffer = Buffer()
@@ -72,6 +79,8 @@ class BoxEstimator(Node):
     def detection_callback(self, msg, m_id):
         if not self.mission_active:
             return  # Ignore all markers until mission starts
+        if self.docking_locked:
+            return  # The final goal is locked. Ignore camera to prevent jitter.
         self.solve_box_pose(msg, m_id)
     
     def start_callback(self, msg):
@@ -139,7 +148,7 @@ class BoxEstimator(Node):
             # 2. Map -> Camera
             try:
                 tf_stamped = self.tf_buffer.lookup_transform(
-                    'odom', pose_msg.header.frame_id, rclpy.time.Time()
+                    'odom', pose_msg.header.frame_id, pose_msg.header.stamp, rclpy.duration.Duration(seconds=0.1)
                 )
             except (LookupException, ConnectivityException, ExtrapolationException):
                 return
@@ -164,29 +173,93 @@ class BoxEstimator(Node):
             curr_y = t_map_box[1, 3]
             _, _, curr_yaw = tft.euler_from_matrix(t_map_box)
 
+
+            dist_to_box = math.hypot(curr_x - t.x, curr_y - t.y)
+
+            # --- PRECISION STATE MACHINE ---
+            # Trigger precision buffering when within 0.7m (gives time to collect frames before stopping)
+            if m_id == 3 and dist_to_box <= 0.5 and not self.precision_mode:
+                self.precision_mode = True
+                self.APPROACH_DIST = 0.15
+                self.get_logger().info("🎯 Entering Precision Mode! Slowing to 0.15 m/s.")
+                
+                # Command Nav2 to slow down without stopping
+                speed_msg = SpeedLimit()
+                speed_msg.percentage = False
+                speed_msg.speed_limit = 0.15 # 0.15 meters per second
+                self.speed_limit_pub.publish(speed_msg)
+
+            if self.precision_mode:
+                if m_id != 3:
+                    return
+                self.precision_buffer.append((curr_x, curr_y, curr_yaw))
+                
+                if len(self.precision_buffer) < 20:
+                    return # Keep driving slowly toward the last known goal while we buffer
+
+                # We have 20 frames. Time to lock the pristine coordinate.
+                self.get_logger().info("🔒 20 Frames Collected. Locking pristine coordinate.")
+                
+                # Sort and Strip Outliers (Top and Bottom 10% / 2 frames each)
+                x_vals = sorted([p[0] for p in self.precision_buffer])
+                y_vals = sorted([p[1] for p in self.precision_buffer])
+                clean_x = sum(x_vals[2:-2]) / 16.0
+                clean_y = sum(y_vals[2:-2]) / 16.0
+
+                # Circular mean for pure yaw
+                sin_sum = sum(math.sin(p[2]) for p in self.precision_buffer[2:-2])
+                cos_sum = sum(math.cos(p[2]) for p in self.precision_buffer[2:-2])
+                clean_yaw = math.atan2(sin_sum, cos_sum)
+
+                # Lock the node
+                self.docking_locked = True
+
+                speed_msg = SpeedLimit()
+                speed_msg.percentage = False
+                speed_msg.speed_limit = 0.0 # 0.0 tells Nav2 to cancel the speed limit restriction
+                self.speed_limit_pub.publish(speed_msg)
+                
+                # Calculate final pristine goal
+                goal_x = clean_x + self.APPROACH_DIST * math.cos(clean_yaw)
+                goal_y = clean_y + self.APPROACH_DIST * math.sin(clean_yaw)
+                goal_yaw = clean_yaw + math.pi 
+
+                self.publish_box_pose(clean_x, clean_y, clean_yaw)
+                self.publish_debug_axes(clean_x, clean_y, clean_yaw)
+                
+                # Execute final lock and drop shields
+                self.shrink_footprint()
+                self.footprint_shrunk = True
+                self.execute_dynamic_goal(goal_x, goal_y, goal_yaw, t.x, t.y, final_lock=True)
+                return
+
             # 5. Filtering
+            current_time = self.get_clock().now().nanoseconds
+            if (current_time - self.last_detection_time.get(m_id, 0)) > 1e9: 
+                if m_id in self.pose_history:
+                    self.pose_history[m_id].clear()
+            self.last_detection_time[m_id] = current_time
+
             if m_id not in self.pose_history:
                 self.pose_history[m_id] = deque(maxlen=self.filter_size)
             self.pose_history[m_id].append((curr_x, curr_y, curr_yaw))
 
+            avg_x = sum(p[0] for p in self.pose_history[m_id]) / len(self.pose_history[m_id])
+            avg_y = sum(p[1] for p in self.pose_history[m_id]) / len(self.pose_history[m_id])
+            
+            # FIX 3: Circular Mean to prevent 180-degree teleportation
             sin_sum = sum(math.sin(p[2]) for p in self.pose_history[m_id])
             cos_sum = sum(math.cos(p[2]) for p in self.pose_history[m_id])
             avg_yaw = math.atan2(sin_sum, cos_sum)
 
-            # 6. Publish Box Center (For Debugging)
             self.publish_box_pose(avg_x, avg_y, avg_yaw)
-            
-            # 7. Publish Debug Axes (To see Rotation)
             self.publish_debug_axes(avg_x, avg_y, avg_yaw)
 
-            # 8. Calculate Goal (Into the box)
-            # Center + Offset. If Box X is "Front", we want to approach along X.
-            safe_offset = self.APPROACH_DIST
-            goal_x = avg_x + safe_offset * math.cos(avg_yaw)
-            goal_y = avg_y + safe_offset * math.sin(avg_yaw)
-            goal_yaw = avg_yaw + math.pi # Face opposite to Box Front
+            goal_x = avg_x + self.APPROACH_DIST * math.cos(avg_yaw)
+            goal_y = avg_y + self.APPROACH_DIST * math.sin(avg_yaw)
+            goal_yaw = avg_yaw + math.pi 
 
-            self.execute_dynamic_goal(goal_x, goal_y, goal_yaw, t.x, t.y)
+            self.execute_dynamic_goal(goal_x, goal_y, goal_yaw, t.x, t.y, final_lock=False)
 
         except Exception as e:
             self.get_logger().warn(f"Math Error: {e}")
@@ -263,7 +336,7 @@ class BoxEstimator(Node):
         self.global_footprint_pub.publish(poly)
         self.get_logger().info("🛡️ Footprint shrunk! Authorizing entry into the box.")
 
-    def execute_dynamic_goal(self, x, y, yaw, robot_x, robot_y):
+    def execute_dynamic_goal(self, x, y, yaw, robot_x, robot_y, final_lock=False):
         goal_msg = PoseStamped()
         goal_msg.header.stamp = self.get_clock().now().to_msg()
         goal_msg.header.frame_id = "odom"
@@ -280,30 +353,16 @@ class BoxEstimator(Node):
 
         distance_to_goal = math.hypot(x - robot_x, y - robot_y)
 
-        if distance_to_goal < 0.10:
-            # We are close enough. Stop sending updates so MPPI can park smoothly without jitter.
-            return
-        if distance_to_goal < 0.4 and not self.footprint_shrunk:
-            self.get_logger().info(f"Target is {distance_to_goal:.2f}m away! Dropping shields and shrinking footprint.")
-            self.shrink_footprint()
-            self.footprint_shrunk = True
-
-        
-        # 2. Dynamic Nav2 Updates (The GoalUpdater Method)
         if not self.navigation_started:
-            # PHASE 1: Wait for a TRUE response before switching phases
             if self.send_nav2_goal(goal_msg):
                 self.navigation_started = True
-                self.get_logger().info("Initial Action Goal Sent. Switching to dynamic topic updates.")
+                self.get_logger().info("Initial Action Goal Sent.")
+        
         else:
-            # PHASE 2: Only update the goal if we are further than 0.5m away
-            if distance_to_goal > 0.5:
+             # If we are locked in, publish the goal update regardless of distance.
+             # If we are in rough approach, only update if > 0.5m away to avoid jitter.
+             if final_lock or distance_to_goal > 0.5:
                 self.update_pub.publish(goal_msg)
-            else:
-                # We are closer than 0.5m. Do NOTHING. 
-                # This starves the GoalUpdatedController, forcing the robot 
-                # to just finish driving the exact path it already has.
-                pass
     
     def send_nav2_goal(self, pose_stamped):
         self.get_logger().info("🚀 SENDING GOAL TO NAV2...")

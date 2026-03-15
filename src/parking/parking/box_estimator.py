@@ -169,9 +169,9 @@ class BoxEstimator(Node):
                 self.pose_history[m_id] = deque(maxlen=self.filter_size)
             self.pose_history[m_id].append((curr_x, curr_y, curr_yaw))
 
-            avg_x = sum(p[0] for p in self.pose_history[m_id]) / len(self.pose_history[m_id])
-            avg_y = sum(p[1] for p in self.pose_history[m_id]) / len(self.pose_history[m_id])
-            avg_yaw = sum(p[2] for p in self.pose_history[m_id]) / len(self.pose_history[m_id])
+            sin_sum = sum(math.sin(p[2]) for p in self.pose_history[m_id])
+            cos_sum = sum(math.cos(p[2]) for p in self.pose_history[m_id])
+            avg_yaw = math.atan2(sin_sum, cos_sum)
 
             # 6. Publish Box Center (For Debugging)
             self.publish_box_pose(avg_x, avg_y, avg_yaw)

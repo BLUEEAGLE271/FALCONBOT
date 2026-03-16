@@ -13,6 +13,7 @@ import math
 from collections import deque
 from std_msgs.msg import Bool
 from geometry_msgs.msg import PoseStamped, Polygon, Point32
+from rclpy.qos import QoSProfile,
 
 class BoxEstimator(Node):
     def __init__(self):
@@ -60,6 +61,12 @@ class BoxEstimator(Node):
         self.global_footprint_pub = self.create_publisher(Polygon, '/global_costmap/footprint', 10)
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
+        marker_qos = QoSProfile(
+            reliability=QoSReliabilityPolicy.BEST_EFFORT,  # drop rather than queue
+            history=QoSHistoryPolicy.KEEP_LAST,
+            depth=1  # only ever process the most recent detection
+        )
+
 
         self.subs = []
         for m_id in self.target_ids:
@@ -68,7 +75,7 @@ class BoxEstimator(Node):
                 PoseStamped, 
                 topic_name, 
                 lambda msg, mid=m_id: self.detection_callback(msg, mid), 
-                10
+                marker_qos
             )
             self.subs.append(sub)
 

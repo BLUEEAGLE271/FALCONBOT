@@ -84,8 +84,7 @@ class VPIRectifiedNode(Node):
 
     def timer_callback(self):
         # Drain stale GStreamer buffer frames before grabbing fresh one
-        for _ in range(3):
-            self.cap.grab()
+        
         ret, frame = self.cap.read()
         if not ret:
             return

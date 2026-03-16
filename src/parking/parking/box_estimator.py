@@ -170,6 +170,9 @@ class BoxEstimator(Node):
                 tft.quaternion_matrix([pose.orientation.x, pose.orientation.y,
                                        pose.orientation.z, pose.orientation.w])
             )
+            with self._state_lock:
+                self.last_detection_time[m_id] = self.get_clock().now().nanoseconds
+
 
             # 2. Odom -> Camera
             # ROOT CAUSE 2: Use image capture timestamp first.
@@ -183,7 +186,7 @@ class BoxEstimator(Node):
                     'odom',
                     pose_msg.header.frame_id,
                     pose_msg.header.stamp,          # image capture time
-                    rclpy.duration.Duration(seconds=0.1)
+                    rclpy.duration.Duration(seconds=0.3)
                 )
             except (LookupException, ConnectivityException, ExtrapolationException):
                 try:
@@ -209,13 +212,17 @@ class BoxEstimator(Node):
             t_box_marker = self.marker_transforms.get(m_id, np.eye(4))
             t_marker_box = tft.inverse_matrix(t_box_marker)
             t_map_box = tft.concatenate_matrices(t_map_cam, t_cam_marker, t_marker_box)
-            rot_180 = tft.euler_matrix(0, 0, math.pi)
-            t_map_box = tft.concatenate_matrices(t_map_box, rot_180)
 
-            # 4. Extract Box Pose
             curr_x = t_map_box[0, 3]
             curr_y = t_map_box[1, 3]
-            _, _, curr_yaw = tft.euler_from_matrix(t_map_box)
+
+            
+            rot_180 = tft.euler_matrix(0, 0, math.pi)
+            t_map_box_oriented = tft.concatenate_matrices(t_map_box, rot_180)
+            _, _, curr_yaw = tft.euler_from_matrix(t_map_box_oriented)
+
+            # 4. Extract Box Pose
+
 
             # Raw camera-to-marker distance — no TF involved, immune to jitter
             dist_cam_to_marker = math.sqrt(

@@ -67,43 +67,44 @@ private:
     }
 
     void handle_client(int socket) {
-    // 1. Send the HTTP header immediately so the browser stops "loading"
-    std::string response = 
-        "HTTP/1.1 200 OK\r\n"
-        "Content-Type: multipart/x-mixed-replace; boundary=frame\r\n\r\n";
-    
-    if (send(socket, response.c_str(), response.length(), 0) < 0) {
-        close(socket);
-        return;
-    }
-
-    while (running_) {
-        std::vector<uchar> buf;
-        {
-            // Simple lock
-            std::lock_guard<std::mutex> lock(frame_mutex_);
-            if (current_frame_.empty()) {
-                continue; 
-            }
-            cv::imencode(".jpg", current_frame_, buf);
+        std::string response = 
+            "HTTP/1.1 200 OK\r\n"
+            "Content-Type: multipart/x-mixed-replace; boundary=frame\r\n\r\n";
+        
+        if (send(socket, response.c_str(), response.length(), 0) < 0) {
+            close(socket);
+            return;
         }
 
-        // 2. The MJPEG part
-        std::string header = 
-            "--frame\r\n"
-            "Content-Type: image/jpeg\r\n"
-            "Content-Length: " + std::to_string(buf.size()) + "\r\n\r\n";
-        
-        // Use send() with the 0 flag for all 3 parts
-        if (send(socket, header.c_str(), header.length(), 0) < 0) break;
-        if (send(socket, buf.data(), buf.size(), 0) < 0) break;
-        if (send(socket, "\r\n", 2, 0) < 0) break;
+        while (running_) {
+            cv::Mat frame_copy;
+            {
+                // Lock only for the copy — release before encoding
+                std::lock_guard<std::mutex> lock(frame_mutex_);
+                if (current_frame_.empty()) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                    continue;
+                }
+                frame_copy = current_frame_.clone();  // ← fast copy
+            }
+            // Encode OUTSIDE the lock — callback can update freely during this
+            std::vector<uchar> buf;
+            std::vector<int> params = {cv::IMWRITE_JPEG_QUALITY, 70}; // 70% quality, faster encode
+            cv::imencode(".jpg", frame_copy, buf, params);
 
-        // Slow it down just a tiny bit so we don't overwhelm the network
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            std::string header = 
+                "--frame\r\n"
+                "Content-Type: image/jpeg\r\n"
+                "Content-Length: " + std::to_string(buf.size()) + "\r\n\r\n";
+            
+            if (send(socket, header.c_str(), header.length(), 0) < 0) break;
+            if (send(socket, buf.data(), buf.size(), 0) < 0) break;
+            if (send(socket, "\r\n", 2, 0) < 0) break;
+
+            std::this_thread::sleep_for(std::chrono::milliseconds(66)); // ~15fps cap
+        }
+        close(socket);
     }
-    close(socket);
-}
 
     bool running_ = true;
     cv::Mat current_frame_;

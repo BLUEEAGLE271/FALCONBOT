@@ -27,13 +27,17 @@ class VPIRectifiedNode(Node):
         
         self.D = [-0.022401, -0.022708, 0.014203, -0.009313]
 
-        # --- 2. VERIFY CUDA IS AVAILABLE ---
-        if not cv2.cuda.getCudaEnabledDeviceCount():
-            self.get_logger().error("No CUDA device found! cv2.cuda will not work.")
-            raise RuntimeError("CUDA not available")
-        self.get_logger().info(f"CUDA device count: {cv2.cuda.getCudaEnabledDeviceCount()}")
+        # --- 2. CONTRAST TUNING ---
+        # output = input * scale + offset
+        # scale=2.0  → doubles contrast range (blacks get blacker, whites whiter)
+        # offset=-80 → darkens midtones so marker blacks become truly black
+        # Tune if needed:
+        #   Dark environment / dim marker  → scale=2.5, offset=-100
+        #   Bright environment             → scale=1.8, offset=-60
+        self.contrast_scale  = 3.0
+        self.contrast_offset = -100.0
 
-        # --- 3. VPI WARP MAP (runs on VIC/CUDA engine) ---
+        # --- 3. VPI WARP MAP (CUDA) ---
         self.get_logger().info("Initializing VPI Hardware Maps...")
         self.grid = vpi.WarpGrid(self.DIM)
         self.X = np.eye(3, 4)
@@ -45,35 +49,15 @@ class VPIRectifiedNode(Node):
             mapping=vpi.FisheyeMapping.EQUIDISTANT,
             coeffs=self.D
         )
-        self.output_vpi = vpi.Image(self.DIM, vpi.Format.RGB8)
 
-        # --- 4. CUDA CLAHE (stays on GPU) ---
-        # Applied to L channel of LAB — sharpens marker edges without blowing highlights
-        # clipLimit: 2.0=subtle, 3.0=good for paper, 4.0+=dark environments
-        self.clahe = cv2.cuda.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+        # Pipeline VPI images — all stay on GPU until final .cpu() call
+        self.vpi_rectified  = vpi.Image(self.DIM, vpi.Format.RGB8)  # remap output
+        self.vpi_gray       = vpi.Image(self.DIM, vpi.Format.U8)    # grayscale
+        self.vpi_contrasted = vpi.Image(self.DIM, vpi.Format.U8)    # final output
 
-        # --- 5. CUDA SHARPENING FILTER (stays on GPU) ---
-        # Counters blur introduced by VPI bilinear remap
-        # Centre value 9 = moderate. Increase to 12 for more aggressive sharpening.
-        sharpen_kernel = np.array([
-            [ 0, -1,  0],
-            [-1,  9, -1],
-            [ 0, -1,  0]
-        ], dtype=np.float32) / 5.0
-
-        # Create filter for 3-channel BGR image
-        self.sharpen_filter = cv2.cuda.createLinearFilter(
-            cv2.CV_8UC3,   # input type
-            cv2.CV_8UC3,   # output type
-            sharpen_kernel
-        )
-
-        # Pre-allocate persistent GPU mats to avoid per-frame allocation
-        self.gpu_bgr       = cv2.cuda_GpuMat()
-        self.gpu_lab       = cv2.cuda_GpuMat()
-        self.gpu_sharpened = cv2.cuda_GpuMat()
-
-        # --- 6. ROS SETUP ---
+        # --- 4. ROS SETUP ---
+        # Published as mono8 — ArUco converts to MONO8 anyway, this eliminates
+        # the wasted BGR→MONO8 conversion and cuts image transport size by 3x
         self.image_pub = self.create_publisher(Image, '/camera/image_rect', 20)
         self.info_pub  = self.create_publisher(CameraInfo, '/camera/camera_info', 20)
 
@@ -84,7 +68,8 @@ class VPIRectifiedNode(Node):
         self.timer = self.create_timer(1.0/15.0, self.timer_callback)
         self.get_logger().info(
             f"Camera ready: {self.DIM[0]}x{self.DIM[1]} | "
-            f"VPI remap + CUDA CLAHE + CUDA sharpen. Full GPU pipeline."
+            f"VPI pipeline: remap → grayscale → contrast (all CUDA). "
+            f"Publishing mono8 directly to ArUco."
         )
 
     def gstreamer_pipeline(self, sensor_id=0):
@@ -98,7 +83,7 @@ class VPIRectifiedNode(Node):
         )
 
     def timer_callback(self):
-        # Drain stale GStreamer buffer frames
+        # Drain stale GStreamer buffer frames before grabbing fresh one
         for _ in range(3):
             self.cap.grab()
         ret, frame = self.cap.read()
@@ -106,61 +91,40 @@ class VPIRectifiedNode(Node):
             return
 
         try:
-            # ----------------------------------------------------------------
-            # STEP 1: VPI fisheye rectification (VIC/CUDA engine)
-            # ----------------------------------------------------------------
             with vpi.Backend.CUDA:
+                # STEP 1: Fisheye rectification (BGR → BGR, GPU)
                 vpi.asimage(frame).remap(
                     self.vpi_warp_map,
                     interp=vpi.Interp.LINEAR,
-                    out=self.output_vpi
+                    out=self.vpi_rectified
                 )
 
-            # ----------------------------------------------------------------
-            # STEP 2: VPI -> GPU Mat
-            # On Jetson unified memory, .cpu() is a cache flush not a real copy.
-            # We immediately upload to cv2.cuda GpuMat for further processing.
-            # ----------------------------------------------------------------
-            rect_cpu = self.output_vpi.cpu()
-            self.gpu_bgr.upload(rect_cpu)
+                # STEP 2: BGR → Grayscale (GPU)
+                # ArUco only uses grayscale — no point carrying colour any further
+                self.vpi_rectified.convert(self.vpi_gray)
 
-            # ----------------------------------------------------------------
-            # STEP 3: CLAHE on GPU (LAB colour space, L channel only)
-            # ----------------------------------------------------------------
-            self.gpu_lab = cv2.cuda.cvtColor(self.gpu_bgr, cv2.COLOR_BGR2Lab)
+                # STEP 3: Contrast boost (GPU)
+                # output = input * scale + offset
+                # Pushes blacks to 0 and whites to 255 — marker edges become razor sharp
+                self.vpi_gray.convert(
+                    self.vpi_contrasted,
+                    scale=self.contrast_scale,
+                    offset=self.contrast_offset
+                )
 
-            # Split LAB channels on GPU
-            lab_channels = cv2.cuda.split(self.gpu_lab)
-            # [0]=L  [1]=A  [2]=B
+            # STEP 4: Single download — Jetson unified mem cache flush, not a real copy
+            final_frame = self.vpi_contrasted.cpu()
 
-            # Apply CLAHE to L channel only — stays on GPU
-            l_enhanced = self.clahe.apply(lab_channels[0], cv2.cuda.Stream_Null())
-
-            # Merge back on GPU
-            cv2.cuda.merge([l_enhanced, lab_channels[1], lab_channels[2]], self.gpu_lab)
-
-            # LAB -> BGR on GPU
-            self.gpu_bgr = cv2.cuda.cvtColor(self.gpu_lab, cv2.COLOR_Lab2BGR)
-
-            # ----------------------------------------------------------------
-            # STEP 4: Sharpening on GPU
-            # ----------------------------------------------------------------
-            self.sharpen_filter.apply(self.gpu_bgr, self.gpu_sharpened)
-
-            # ----------------------------------------------------------------
-            # STEP 5: Single download — only CPU touch per frame
-            # ----------------------------------------------------------------
-            final_frame = self.gpu_sharpened.download()
-
-            # ----------------------------------------------------------------
-            # STEP 6: Publish
-            # ----------------------------------------------------------------
+            # STEP 5: Publish as mono8
+            # ArUco node does cv_bridge::toCvCopy(msg, MONO8) — this is already MONO8,
+            # so zero conversion happens on the ArUco side
             now = self.get_clock().now().to_msg()
-            img_msg = self.bridge.cv2_to_imgmsg(final_frame, "bgr8")
+            img_msg = self.bridge.cv2_to_imgmsg(final_frame, "mono8")
             img_msg.header.stamp = now
             img_msg.header.frame_id = self.frame_id
             self.image_pub.publish(img_msg)
 
+            # Camera Info — K matrix is still valid, image is just grayscale now
             info_msg = CameraInfo()
             info_msg.header = img_msg.header
             info_msg.height = self.DIM[1]

@@ -34,7 +34,7 @@ class BoxEstimator(Node):
         self.setup_box_geometry()
 
         # --- FILTERING ---
-        self.filter_size = 5 
+        self.filter_size = 10   # Increased from 5 for smoother odom-frame estimates
         self.pose_history = {} 
 
         self.precision_mode = False
@@ -43,7 +43,10 @@ class BoxEstimator(Node):
         self.last_detection_time = {}
 
         # --- DEBUG LOGGING ---
-        self.last_log_time = {}  # Per-marker 1Hz throttle
+        self.last_log_time = {}
+
+        # --- Nav2 retry throttle ---
+        self.last_nav2_attempt_ns = 0
 
         # --- ROS SETUP ---
         self.nav_client = ActionClient(self, NavigateToPose, 'navigate_to_pose')
@@ -58,7 +61,6 @@ class BoxEstimator(Node):
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
 
-        # Dynamic Subscription Mode
         self.subs = []
         for m_id in self.target_ids:
             topic_name = f'/aruco/marker_{m_id}'
@@ -107,54 +109,66 @@ class BoxEstimator(Node):
         # Marker 1 — Left Face (+Y)
         self.marker_transforms[1] = make_mat(
             [0.0, self.half_W, 0.2],
-            [-1, 0, 0],
-            [0, 0, 1],
-            [0, 1, 0]
+            [-1, 0, 0], [0, 0, 1], [0, 1, 0]
         )
 
         # Marker 0 — Right Face (-Y)
         self.marker_transforms[0] = make_mat(
             [0.0, -self.half_W, 0.2], 
-            [1, 0, 0], 
-            [0, 0, 1], 
-            [0, -1, 0]
+            [1, 0, 0], [0, 0, 1], [0, -1, 0]
         )
 
         # Marker 2 — Back Face (-X)
         self.marker_transforms[2] = make_mat(
-            [-self.half_L, 0.0, 0.2],  # Fixed: back face is at -half_L, not +APPROACH_DIST
-            [0, 1, 0],
-            [0, 0, 1],
-            [1, 0, 0]
+            [-self.half_L, 0.0, 0.2],
+            [0, 1, 0], [0, 0, 1], [1, 0, 0]
         )
 
         # Marker 3 — Front Face (+X)
         self.marker_transforms[3] = make_mat(
             [self.half_L - 0.06, 0.0, 0.2],
-            [0, -1, 0],
-            [0, 0, 1],
-            [-1, 0, 0]
+            [0, -1, 0], [0, 0, 1], [-1, 0, 0]
         )
 
     def solve_box_pose(self, pose_msg, m_id):
         try:
-            # 1. Camera -> Marker
-            p = pose_msg.pose
+            # 1. Camera -> Marker (from ArUco detection)
+            pose = pose_msg.pose   # renamed from 'p' to avoid shadowing loop vars below
             t_cam_marker = tft.concatenate_matrices(
-                tft.translation_matrix([p.position.x, p.position.y, p.position.z]), 
-                tft.quaternion_matrix([p.orientation.x, p.orientation.y, p.orientation.z, p.orientation.w])
+                tft.translation_matrix([pose.position.x, pose.position.y, pose.position.z]), 
+                tft.quaternion_matrix([pose.orientation.x, pose.orientation.y,
+                                       pose.orientation.z, pose.orientation.w])
             )
 
             # 2. Odom -> Camera
+            # ----------------------------------------------------------------
+            # FIX 1: Use image header timestamp for TF lookup first.
+            # This matches the robot's position at the MOMENT the frame was
+            # captured — not "now". Without this, as the robot drives forward,
+            # the TF lookup returns a slightly advanced robot position each frame,
+            # making the computed box centre drift backward in odom space.
+            #
+            # Fallback to latest transform if timestamp lookup fails (e.g. old bag).
+            # ----------------------------------------------------------------
+            tf_stamped = None
             try:
                 tf_stamped = self.tf_buffer.lookup_transform(
-                    'odom', pose_msg.header.frame_id,
-                    rclpy.time.Time(),  # Use latest available transform
+                    'odom',
+                    pose_msg.header.frame_id,
+                    pose_msg.header.stamp,          # ← image capture time
                     rclpy.duration.Duration(seconds=0.1)
                 )
-            except (LookupException, ConnectivityException, ExtrapolationException) as e:
-                self.get_logger().warn(f"TF lookup failed: {e}")
-                return
+            except (LookupException, ConnectivityException, ExtrapolationException):
+                try:
+                    tf_stamped = self.tf_buffer.lookup_transform(
+                        'odom',
+                        pose_msg.header.frame_id,
+                        rclpy.time.Time(),          # ← fallback: latest available
+                        rclpy.duration.Duration(seconds=0.1)
+                    )
+                except (LookupException, ConnectivityException, ExtrapolationException) as e:
+                    self.get_logger().warn(f"TF lookup failed entirely: {e}")
+                    return
 
             t = tf_stamped.transform.translation
             r = tf_stamped.transform.rotation
@@ -176,11 +190,11 @@ class BoxEstimator(Node):
             curr_y = t_map_box[1, 3]
             _, _, curr_yaw = tft.euler_from_matrix(t_map_box)
 
-            # Raw camera-to-marker distance (no TF needed, immune to transform jitter)
+            # Raw camera-to-marker distance — immune to TF jitter
             dist_cam_to_marker = math.sqrt(
-                p.position.x**2 + 
-                p.position.y**2 + 
-                p.position.z**2
+                pose.position.x**2 + 
+                pose.position.y**2 + 
+                pose.position.z**2
             )
 
             # --- 1HZ DEBUG LOG PER MARKER ---
@@ -215,6 +229,15 @@ class BoxEstimator(Node):
 
                 self.precision_buffer.append((curr_x, curr_y, curr_yaw))
 
+                # Keep publishing mask/goal while buffering so Nav2 keeps moving
+                interim_goal_x = curr_x + self.APPROACH_DIST * math.cos(curr_yaw)
+                interim_goal_y = curr_y + self.APPROACH_DIST * math.sin(curr_yaw)
+                interim_goal_yaw = curr_yaw + math.pi
+                self.execute_dynamic_goal(
+                    interim_goal_x, interim_goal_y, interim_goal_yaw,
+                    curr_x, curr_y, t.x, t.y, final_lock=False
+                )
+
                 # Log buffer progress at 1Hz
                 if (now_ns - self.last_log_time.get('buffer', 0)) > 1e9:
                     self.last_log_time['buffer'] = now_ns
@@ -226,18 +249,18 @@ class BoxEstimator(Node):
                 if len(self.precision_buffer) < 20:
                     return
 
-                # 20 frames collected — lock the pristine coordinate
+                # 20 frames collected — lock pristine coordinate
                 self.get_logger().info("🔒 20 Frames Collected. Locking pristine coordinate.")
                 
-                # Strip top and bottom 2 outliers (10% each side)
-                x_vals = sorted([p[0] for p in self.precision_buffer])
-                y_vals = sorted([p[1] for p in self.precision_buffer])
+                # Strip top/bottom 2 outliers — use distinct loop var 'entry' not 'p'
+                x_vals = sorted([entry[0] for entry in self.precision_buffer])
+                y_vals = sorted([entry[1] for entry in self.precision_buffer])
                 clean_x = sum(x_vals[2:-2]) / 16.0
                 clean_y = sum(y_vals[2:-2]) / 16.0
 
                 # Circular mean for yaw
-                sin_sum = sum(math.sin(p[2]) for p in self.precision_buffer[2:-2])
-                cos_sum = sum(math.cos(p[2]) for p in self.precision_buffer[2:-2])
+                sin_sum = sum(math.sin(entry[2]) for entry in self.precision_buffer[2:-2])
+                cos_sum = sum(math.cos(entry[2]) for entry in self.precision_buffer[2:-2])
                 clean_yaw = math.atan2(sin_sum, cos_sum)
 
                 self.docking_locked = True
@@ -247,7 +270,6 @@ class BoxEstimator(Node):
                 speed_msg.speed_limit = 0.0
                 self.speed_limit_pub.publish(speed_msg)
                 
-                # Calculate final pristine goal
                 goal_x = clean_x + self.APPROACH_DIST * math.cos(clean_yaw)
                 goal_y = clean_y + self.APPROACH_DIST * math.sin(clean_yaw)
                 goal_yaw = clean_yaw + math.pi 
@@ -263,7 +285,11 @@ class BoxEstimator(Node):
                 
                 self.shrink_footprint()
                 self.footprint_shrunk = True
-                self.execute_dynamic_goal(goal_x, goal_y, goal_yaw, clean_x, clean_y, t.x, t.y, final_lock=True)
+                self.execute_dynamic_goal(
+                    goal_x, goal_y, goal_yaw,
+                    clean_x, clean_y, t.x, t.y,
+                    final_lock=True
+                )
                 return
 
             # 5. Filtering (rough approach)
@@ -277,12 +303,12 @@ class BoxEstimator(Node):
                 self.pose_history[m_id] = deque(maxlen=self.filter_size)
             self.pose_history[m_id].append((curr_x, curr_y, curr_yaw))
 
-            avg_x = sum(p[0] for p in self.pose_history[m_id]) / len(self.pose_history[m_id])
-            avg_y = sum(p[1] for p in self.pose_history[m_id]) / len(self.pose_history[m_id])
+            avg_x = sum(entry[0] for entry in self.pose_history[m_id]) / len(self.pose_history[m_id])
+            avg_y = sum(entry[1] for entry in self.pose_history[m_id]) / len(self.pose_history[m_id])
             
             # Circular mean to prevent 180-degree yaw wrap
-            sin_sum = sum(math.sin(p[2]) for p in self.pose_history[m_id])
-            cos_sum = sum(math.cos(p[2]) for p in self.pose_history[m_id])
+            sin_sum = sum(math.sin(entry[2]) for entry in self.pose_history[m_id])
+            cos_sum = sum(math.cos(entry[2]) for entry in self.pose_history[m_id])
             avg_yaw = math.atan2(sin_sum, cos_sum)
 
             self.publish_box_pose(avg_x, avg_y, avg_yaw)
@@ -292,7 +318,6 @@ class BoxEstimator(Node):
             goal_y = avg_y + self.APPROACH_DIST * math.sin(avg_yaw)
             goal_yaw = avg_yaw + math.pi 
 
-            # 1Hz log of computed goal during rough approach
             if (now_ns - self.last_log_time.get('goal', 0)) > 1e9:
                 self.last_log_time['goal'] = now_ns
                 self.get_logger().info(
@@ -322,7 +347,6 @@ class BoxEstimator(Node):
     def publish_debug_axes(self, x, y, yaw):
         marker_array = MarkerArray()
         
-        # RED ARROW = Box X Axis (Front)
         m1 = Marker()
         m1.header.frame_id = "odom"
         m1.header.stamp = self.get_clock().now().to_msg()
@@ -341,7 +365,6 @@ class BoxEstimator(Node):
         m1.color.r = 1.0; m1.color.a = 1.0
         marker_array.markers.append(m1)
 
-        # GREEN ARROW = Box Y Axis (Left)
         m2 = Marker()
         m2.header.frame_id = "odom"
         m2.header.stamp = self.get_clock().now().to_msg()
@@ -365,9 +388,9 @@ class BoxEstimator(Node):
     def shrink_footprint(self):
         poly = Polygon()
         tiny_points = [[-0.04, -0.04], [-0.04, 0.04], [0.04, 0.04], [0.04, -0.04]]
-        for p in tiny_points:
+        for pt_coords in tiny_points:
             pt = Point32()
-            pt.x, pt.y, pt.z = float(p[0]), float(p[1]), 0.0
+            pt.x, pt.y, pt.z = float(pt_coords[0]), float(pt_coords[1]), 0.0
             poly.points.append(pt)
         self.local_footprint_pub.publish(poly)
         self.global_footprint_pub.publish(poly)
@@ -385,7 +408,7 @@ class BoxEstimator(Node):
         goal_msg.pose.orientation.z = q[2]
         goal_msg.pose.orientation.w = q[3]
 
-        # Mask around BOX CENTRE, not the approach point
+        # Mask around BOX CENTRE — not the approach point
         mask_msg = PoseStamped()
         mask_msg.header.stamp = self.get_clock().now().to_msg()
         mask_msg.header.frame_id = "odom"
@@ -397,12 +420,18 @@ class BoxEstimator(Node):
         distance_to_goal = math.hypot(goal_x - robot_x, goal_y - robot_y)
 
         if not self.navigation_started:
-            if self.send_nav2_goal(goal_msg):
-                self.navigation_started = True
-                self.get_logger().info(
-                    f"🚀 Initial goal sent: ({goal_x:.3f}, {goal_y:.3f}) | "
-                    f"dist_to_goal={distance_to_goal:.3f}m"
-                )
+            # FIX 2: Non-blocking Nav2 check — was wait_for_server(5.0) which
+            # blocked the entire node for 5 seconds every attempt, preventing
+            # precision mode from triggering and dropping to 0.2Hz updates
+            now_ns = self.get_clock().now().nanoseconds
+            if (now_ns - self.last_nav2_attempt_ns) > 5e9:
+                self.last_nav2_attempt_ns = now_ns
+                if self.send_nav2_goal(goal_msg):
+                    self.navigation_started = True
+                    self.get_logger().info(
+                        f"🚀 Initial goal sent: ({goal_x:.3f}, {goal_y:.3f}) | "
+                        f"dist_to_goal={distance_to_goal:.3f}m"
+                    )
         else:
             if final_lock or distance_to_goal > 0.5:
                 self.update_pub.publish(goal_msg)
@@ -410,8 +439,11 @@ class BoxEstimator(Node):
     def send_nav2_goal(self, pose_stamped):
         self.get_logger().info("🚀 SENDING GOAL TO NAV2...")
         
-        if not self.nav_client.wait_for_server(timeout_sec=5.0):
-            self.get_logger().error("Nav2 Action Server not available! Will try again.")
+        # FIX 2 (continued): server_is_ready() is non-blocking — instant check
+        # The old wait_for_server(timeout_sec=5.0) blocked Python's GIL for 5s,
+        # freezing all callbacks including marker detection
+        if not self.nav_client.server_is_ready():
+            self.get_logger().warn("Nav2 not available yet, will retry in 5s.")
             return False
 
         goal_msg = NavigateToPose.Goal()

@@ -19,6 +19,8 @@ struct MarkerFilter {
 class RobustAruco : public rclcpp::Node {
 public:
     RobustAruco() : Node("robust_aruco_node") {
+        cv::setNumThreads(3);
+        cv::setUseOptimized(true);
         this->declare_parameter("marker_size_default", 0.094);
         this->declare_parameter("marker_size_small", 0.0378);
         this->declare_parameter("small_marker_id", 3);

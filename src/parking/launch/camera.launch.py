@@ -12,7 +12,7 @@ def generate_launch_description():
             emulate_tty=True,
             parameters=[{
                 'use_sim_time': False  # ← explicit, no ambiguity
-            }]
+            }],
             extra_arguments=[{'use_intra_process_comms': True}]
         )
     ])

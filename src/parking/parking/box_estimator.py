@@ -59,7 +59,7 @@ class BoxEstimator(Node):
         self.speed_limit_pub = self.create_publisher(SpeedLimit, '/speed_limit', 10)
         self.local_footprint_pub = self.create_publisher(Polygon, '/local_costmap/footprint', 10)
         self.global_footprint_pub = self.create_publisher(Polygon, '/global_costmap/footprint', 10)
-        self.tf_buffer = Buffer()
+        self.tf_buffer = Buffer(cache_time=rclpy.duration.Duration(seconds=30.0))
         self.tf_listener = TransformListener(self.tf_buffer, self)
         marker_qos = QoSProfile(
             reliability=QoSReliabilityPolicy.BEST_EFFORT,  # drop rather than queue

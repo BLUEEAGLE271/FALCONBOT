@@ -9,6 +9,7 @@ import subprocess, psutil
 ##colcon build --symlink-install   --allow-overriding cv_bridge image_geometry --parallel-workers 2
 ##source install/setup.bash
 ##ros2 launch parking mission.launch.py
+##ros2 topic pub --once /start_mission std_msgs/msg/Bool "{data: true}"
 
 def pin_processes(context, *args, **kwargs):
     for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
@@ -247,7 +248,7 @@ def generate_launch_description():
         TimerAction(period=6.0, actions=[slam_node]),
 
         # # # 4. Wait 10s for Map to build, then start Nav2
-        TimerAction(period=8.0, actions=[nav2_launch]),
+        #TimerAction(period=8.0, actions=[nav2_launch]),
         TimerAction(period=15.0, actions=[OpaqueFunction(function=pin_processes)]),
 
         # # # 5. Finally, start your logic

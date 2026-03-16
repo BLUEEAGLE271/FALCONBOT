@@ -9,6 +9,9 @@ def generate_launch_description():
             executable='rectified_parking',
             name='vpi_rectified_node',
             output='screen',
-            emulate_tty=True
+            emulate_tty=True,
+            parameters=[{
+                'use_sim_time': False  # ← explicit, no ambiguity
+            }]
         )
     ])

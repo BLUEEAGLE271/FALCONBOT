@@ -53,6 +53,10 @@ public:
                                   * M_PI / 180.0;
 
         rclcpp::QoS qos_profile = rclcpp::QoS(10).reliable();
+        auto qos = rclcpp::QoS(1)
+            .reliability(rclcpp::ReliabilityPolicy::BestEffort)
+            .history(rclcpp::HistoryPolicy::KeepLast);
+        marker_pubs_[id] = this->create_publisher<geometry_msgs::msg::PoseStamped>(topic_name, qos);
 
         info_sub_ = this->create_subscription<sensor_msgs::msg::CameraInfo>(
             "/camera/camera_info", qos_profile,

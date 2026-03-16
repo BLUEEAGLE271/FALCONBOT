@@ -129,7 +129,8 @@ private:
 
             cv_bridge::CvImagePtr cv_ptr;
             try {
-                cv_ptr = cv_bridge::toCvCopy(msg, sensor_msgs::image_encodings::MONO8);
+                auto cv_ptr = cv_bridge::toCvShare(msg, sensor_msgs::image_encodings::MONO8);
+                cv::Mat debug_img = cv_ptr->image.clone();
             } catch (cv_bridge::Exception& e) {
                 RCLCPP_ERROR(this->get_logger(), "cv_bridge exception: %s", e.what());
                 return;

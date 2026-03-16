@@ -9,18 +9,22 @@
 #include <tf2/LinearMath/Matrix3x3.h>
 #include <opencv2/objdetect/aruco_detector.hpp>
 #include <map>
+#include <cmath>
 
 struct MarkerFilter {
     cv::Vec3d tvec;
     tf2::Quaternion q;
     bool initialized = false;
+    rclcpp::Time last_seen;   // track when we last saw this marker
 };
 
 class RobustAruco : public rclcpp::Node {
 public:
     RobustAruco() : Node("robust_aruco_node") {
+        // Give ArUco 3 cores — leaves 3 for Nav2/SLAM/EKF
         cv::setNumThreads(3);
         cv::setUseOptimized(true);
+
         this->declare_parameter("marker_size_default", 0.094);
         this->declare_parameter("marker_size_small", 0.0378);
         this->declare_parameter("small_marker_id", 3);
@@ -28,22 +32,25 @@ public:
         this->declare_parameter("camera_frame", "camera_optical_frame");
         this->declare_parameter("filter_alpha_small", 0.1);
         this->declare_parameter("filter_alpha_default", 0.3);
-
-        // Process pose every N frames — reduces CPU on solvePnP which is expensive.
-        // Detection + pose runs at (camera_fps / process_every_n_frames).
-        // Debug image is published every N*2 frames so it doesn't flood bandwidth.
-        // Default 2 = process every 2nd frame (7.5Hz at 15fps camera).
-        // Set to 3 for lower CPU (5Hz), set to 1 to disable skipping entirely.
         this->declare_parameter("process_every_n_frames", 2);
 
-        default_size_ = this->get_parameter("marker_size_default").as_double();
-        small_size_   = this->get_parameter("marker_size_small").as_double();
-        small_id_     = this->get_parameter("small_marker_id").as_int();
-        target_id_    = this->get_parameter("target_id").as_int();
-        camera_frame_ = this->get_parameter("camera_frame").as_string();
-        alpha_small_  = this->get_parameter("filter_alpha_small").as_double();
-        alpha_default_= this->get_parameter("filter_alpha_default").as_double();
+        // How long (seconds) marker can be unseen before filter resets
+        this->declare_parameter("filter_reset_timeout", 0.5);
+
+        // Max rotation change (degrees) per frame before rejecting as a flip
+        this->declare_parameter("flip_rejection_threshold_deg", 90.0);
+
+        default_size_  = this->get_parameter("marker_size_default").as_double();
+        small_size_    = this->get_parameter("marker_size_small").as_double();
+        small_id_      = this->get_parameter("small_marker_id").as_int();
+        target_id_     = this->get_parameter("target_id").as_int();
+        camera_frame_  = this->get_parameter("camera_frame").as_string();
+        alpha_small_   = this->get_parameter("filter_alpha_small").as_double();
+        alpha_default_ = this->get_parameter("filter_alpha_default").as_double();
         process_every_n_frames_ = this->get_parameter("process_every_n_frames").as_int();
+        filter_reset_timeout_   = this->get_parameter("filter_reset_timeout").as_double();
+        flip_threshold_rad_     = this->get_parameter("flip_rejection_threshold_deg").as_double()
+                                  * M_PI / 180.0;
 
         rclcpp::QoS qos_profile = rclcpp::QoS(10).reliable();
 
@@ -59,22 +66,29 @@ public:
         tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
 
         has_info_ = false;
+        fps_start_time_ = this->get_clock()->now();
 
         cv::aruco::DetectorParameters detectorParams;
         detectorParams.cornerRefinementMethod = cv::aruco::CORNER_REFINE_SUBPIX;
         cv::aruco::Dictionary dictionary = cv::aruco::getPredefinedDictionary(cv::aruco::DICT_6X6_50);
         detector_ = cv::aruco::ArucoDetector(dictionary, detectorParams);
 
-        RCLCPP_INFO(this->get_logger(), 
-            "Robust ArUco ready. Processing every %d frames.", process_every_n_frames_);
+        RCLCPP_INFO(this->get_logger(),
+            "Robust ArUco ready. Processing every %d frames. "
+            "Flip rejection: %.0f deg. Filter reset: %.1fs.",
+            process_every_n_frames_,
+            this->get_parameter("flip_rejection_threshold_deg").as_double(),
+            filter_reset_timeout_);
     }
 
 private:
-    int frame_counter_ = 0;
+    int frame_counter_  = 0;
+    int fps_frame_count_ = 0;
     int process_every_n_frames_;
+    double filter_reset_timeout_;
+    double flip_threshold_rad_;
+    rclcpp::Time fps_start_time_;
 
-    // Cache last known detections so debug image always shows something
-    // even on skipped frames
     std::vector<int> last_ids_;
     std::vector<std::vector<cv::Point2f>> last_corners_;
 
@@ -87,6 +101,7 @@ private:
         for (size_t i = 0; i < msg->d.size(); i++)
             dist_coeffs_.at<double>(0, i) = msg->d[i];
         has_info_ = true;
+        RCLCPP_INFO(this->get_logger(), "Camera info received.");
     }
 
     void image_callback(const sensor_msgs::msg::Image::SharedPtr msg) {
@@ -94,6 +109,19 @@ private:
             if (!has_info_) return;
 
             frame_counter_++;
+
+            // --- 1HZ FPS LOG ---
+            fps_frame_count_++;
+            double elapsed = (this->get_clock()->now() - fps_start_time_).seconds();
+            if (elapsed >= 1.0) {
+                RCLCPP_INFO(this->get_logger(),
+                    "Camera: %d fps | ArUco processing: %d fps | Markers visible: %zu",
+                    fps_frame_count_,
+                    fps_frame_count_ / process_every_n_frames_,
+                    last_ids_.size());
+                fps_frame_count_ = 0;
+                fps_start_time_  = this->get_clock()->now();
+            }
 
             cv_bridge::CvImagePtr cv_ptr;
             try {
@@ -114,12 +142,11 @@ private:
                 std::vector<std::vector<cv::Point2f>> corners;
                 detector_.detectMarkers(cv_ptr->image, corners, ids);
 
-                // Cache for debug drawing on skipped frames
                 last_ids_     = ids;
                 last_corners_ = corners;
 
                 for (size_t i = 0; i < ids.size(); i++) {
-                    int current_id = ids[i];
+                    int current_id  = ids[i];
                     double current_size = (current_id == small_id_) ? small_size_ : default_size_;
                     double alpha        = (current_id == small_id_) ? alpha_small_ : alpha_default_;
 
@@ -134,24 +161,70 @@ private:
                     cv::solvePnP(objPoints, corners[i], camera_matrix_, dist_coeffs_,
                                  rvec_raw, tvec_raw, false, cv::SOLVEPNP_IPPE_SQUARE);
 
-                    if (filters_.find(current_id) == filters_.end())
+                    // Initialise filter entry if first time seeing this marker
+                    if (filters_.find(current_id) == filters_.end()) {
                         filters_[current_id] = MarkerFilter();
+                        filters_[current_id].last_seen = this->get_clock()->now();
+                    }
 
                     tf2::Quaternion q_raw = get_quat_from_rvec(rvec_raw);
+                    auto& filter = filters_[current_id];
+
+                    // --------------------------------------------------------
+                    // FIX 1: FILTER RESET ON RE-DETECTION
+                    // If marker was unseen for > timeout, reset filter so it
+                    // snaps to the new position instead of drifting from stale state
+                    // --------------------------------------------------------
+                    double gap = (this->get_clock()->now() - filter.last_seen).seconds();
+                    if (filter.initialized && gap > filter_reset_timeout_) {
+                        RCLCPP_INFO(this->get_logger(),
+                            "M%d: Lost for %.2fs — resetting filter, snapping to new pose",
+                            current_id, gap);
+                        filter.initialized = false;
+                    }
+                    filter.last_seen = this->get_clock()->now();
+
                     cv::Vec3d tvec_final;
                     tf2::Quaternion q_final;
 
-                    if (!filters_[current_id].initialized) {
-                        tvec_final = tvec_raw;
-                        q_final    = q_raw;
-                        filters_[current_id].initialized = true;
+                    if (!filter.initialized) {
+                        // First detection or post-reset — accept directly, no filtering
+                        tvec_final         = tvec_raw;
+                        q_final            = q_raw;
+                        filter.initialized = true;
+
                     } else {
-                        tvec_final = alpha * tvec_raw + (1.0 - alpha) * filters_[current_id].tvec;
-                        q_final    = filters_[current_id].q.slerp(q_raw, alpha);
+                        // --------------------------------------------------------
+                        // FIX 2: 180° FLIP REJECTION
+                        // IPPE_SQUARE has pose ambiguity — at certain angles it
+                        // returns the mirror solution causing yaw to jump 180°.
+                        // Measure rotation change from last frame and reject if
+                        // it exceeds the threshold.
+                        // --------------------------------------------------------
+                        tf2::Quaternion q_diff = filter.q.inverse() * q_raw;
+                        q_diff.normalize();
+                        double angle = 2.0 * std::acos(std::min(1.0, std::abs(q_diff.w())));
+
+                        if (angle > flip_threshold_rad_) {
+                            RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 500,
+                                "M%d: Flip rejected (%.1f deg > %.1f deg) — holding last pose",
+                                current_id,
+                                angle * 180.0 / M_PI,
+                                flip_threshold_rad_ * 180.0 / M_PI);
+                            // Republish last known good pose without updating filter
+                            ensure_publisher_exists(current_id);
+                            publish_marker_pose(filter.tvec, filter.q, msg->header, current_id);
+                            publish_tf_quat(filter.tvec, filter.q, msg->header.stamp, current_id);
+                            continue;
+                        }
+
+                        // Valid frame — apply EMA filter
+                        tvec_final = alpha * tvec_raw + (1.0 - alpha) * filter.tvec;
+                        q_final    = filter.q.slerp(q_raw, alpha);
                     }
 
-                    filters_[current_id].tvec = tvec_final;
-                    filters_[current_id].q    = q_final;
+                    filter.tvec = tvec_final;
+                    filter.q    = q_final;
 
                     ensure_publisher_exists(current_id);
                     publish_marker_pose(tvec_final, q_final, msg->header, current_id);
@@ -160,24 +233,19 @@ private:
             }
 
             // ----------------------------------------------------------------
-            // DEBUG IMAGE — published every N*2 frames to save bandwidth
-            // Always draws the last known detections so it never goes blank
+            // DEBUG IMAGE — every N*2 frames, always shows last known detections
             // ----------------------------------------------------------------
             if (frame_counter_ % (process_every_n_frames_ * 2) == 0) {
-                // Draw markers on current frame using cached last detection
                 if (!last_ids_.empty()) {
                     cv::aruco::drawDetectedMarkers(cv_ptr->image, last_corners_, last_ids_);
 
-                    // Draw axes for each detected marker
                     for (size_t i = 0; i < last_ids_.size(); i++) {
-                        int current_id  = last_ids_[i];
+                        int current_id      = last_ids_[i];
                         double current_size = (current_id == small_id_) ? small_size_ : default_size_;
 
-                        // Only draw axes if we have a filter state for this marker
-                        if (filters_.find(current_id) != filters_.end() && 
-                            filters_[current_id].initialized) 
+                        if (filters_.find(current_id) != filters_.end() &&
+                            filters_[current_id].initialized)
                         {
-                            // Convert filtered quaternion back to rvec for drawing
                             cv::Mat rot_mat(3, 3, CV_64F);
                             tf2::Matrix3x3 tf_mat(filters_[current_id].q);
                             for (int r = 0; r < 3; r++)
@@ -243,7 +311,7 @@ private:
     void publish_marker_pose(cv::Vec3d tvec, tf2::Quaternion q,
                              std_msgs::msg::Header header, int id) {
         geometry_msgs::msg::PoseStamped p;
-        p.header = header;
+        p.header             = header;
         p.pose.position.x    = tvec[0];
         p.pose.position.y    = tvec[1];
         p.pose.position.z    = tvec[2];

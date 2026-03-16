@@ -25,6 +25,10 @@ def pin_processes(context, *args, **kwargs):
                 subprocess.run(['taskset', '-cp', '0,1', str(proc.pid)])
             elif 'aruco' in cmd:
                 subprocess.run(['taskset', '-cp', '0,1', str(proc.pid)])
+            elif 'box_estimator' in cmd:
+                subprocess.run(['taskset', '-cp', '4,5', str(proc.pid)])
+            elif 'rectified_parking' in cmd:
+                subprocess.run(['taskset', '-cp', '4', str(proc.pid)])
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             pass
     return []

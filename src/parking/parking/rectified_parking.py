@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+import threading
+import time
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Image, CameraInfo
@@ -16,8 +18,10 @@ class VPIRectifiedNode(Node):
         self.bridge = CvBridge()
         
         # --- 1. CONFIGURATION ---
-        self.scale_factor = 0.5
-        self.DIM = (1640, 1232)
+        # 0.25 = 820x616 — hits 15Hz on Jetson Orin Nano
+        # 0.5  = 1640x1232 — too large, drops to ~3fps
+        self.scale_factor = 0.25
+        self.DIM = (820, 616)
         
         self.K = np.array([
             [1813.000558 * self.scale_factor,    0.      ,  1634.163912 * self.scale_factor],
@@ -29,12 +33,11 @@ class VPIRectifiedNode(Node):
 
         # --- 2. CONTRAST TUNING ---
         # output = input * scale + offset
-        # scale=2.0  → doubles contrast range (blacks get blacker, whites whiter)
-        # offset=-80 → darkens midtones so marker blacks become truly black
-        # Tune if needed:
-        #   Dark environment / dim marker  → scale=2.5, offset=-100
-        #   Bright environment             → scale=1.8, offset=-60
-        self.contrast_scale  = 3.0
+        # scale=2.5, offset=-100 → aggressive contrast for paper markers
+        # Tune:
+        #   Still grey/washed out  → raise scale to 3.0, offset to -120
+        #   Whites blown out       → lower offset to -80
+        self.contrast_scale  = 2.5
         self.contrast_offset = -100.0
 
         # --- 3. VPI WARP MAP (CUDA) ---
@@ -50,80 +53,105 @@ class VPIRectifiedNode(Node):
             coeffs=self.D
         )
 
-        # Pipeline VPI images — all stay on GPU until final .cpu() call
-        self.vpi_rectified  = vpi.Image(self.DIM, vpi.Format.RGB8)  # remap output
-        self.vpi_gray       = vpi.Image(self.DIM, vpi.Format.U8)    # grayscale
-        self.vpi_contrasted = vpi.Image(self.DIM, vpi.Format.U8)    # final output
+        # GPU images — stay on GPU until final .cpu() call
+        self.vpi_rectified  = vpi.Image(self.DIM, vpi.Format.RGB8)
+        self.vpi_gray       = vpi.Image(self.DIM, vpi.Format.U8)
+        self.vpi_contrasted = vpi.Image(self.DIM, vpi.Format.U8)
 
-        # --- 4. ROS SETUP ---
-        # Published as mono8 — ArUco converts to MONO8 anyway, this eliminates
-        # the wasted BGR→MONO8 conversion and cuts image transport size by 3x
+        # --- 4. FPS TRACKING ---
+        self._fps_count = 0
+        self._fps_last  = time.time()
+
+        # --- 5. ROS SETUP ---
         self.image_pub = self.create_publisher(Image, '/camera/image_rect', 20)
         self.info_pub  = self.create_publisher(CameraInfo, '/camera/camera_info', 20)
 
+        # --- 6. CAMERA ---
         self.cap = cv2.VideoCapture(self.gstreamer_pipeline(), cv2.CAP_GSTREAMER)
         if not self.cap.isOpened():
             self.get_logger().error("Could not open camera!")
+            return
 
-        self.timer = self.create_timer(1.0/15.0, self.timer_callback)
+        # --- 7. CAMERA THREAD ---
+        # Dedicated thread reads frames exactly when they arrive
+        # Much better than a ROS timer which fires independently of frame availability
+        self._running = True
+        self._cam_thread = threading.Thread(target=self._camera_loop, daemon=True)
+        self._cam_thread.start()
+
         self.get_logger().info(
             f"Camera ready: {self.DIM[0]}x{self.DIM[1]} | "
-            f"VPI pipeline: remap → grayscale → contrast (all CUDA). "
-            f"Publishing mono8 directly to ArUco."
+            f"VPI: remap → gray → contrast (all CUDA) | "
+            f"contrast_scale={self.contrast_scale} offset={self.contrast_offset}"
         )
 
     def gstreamer_pipeline(self, sensor_id=0):
+        # max-buffers=1 drop=true: appsink discards stale frames at hardware level
+        # No grab() loop needed in Python — this handles it properly
         return (
             f"nvarguscamerasrc sensor-id={sensor_id} ! "
             f"video/x-raw(memory:NVMM), width=3280, height=2464, framerate=15/1 ! "
-            f"nvvidconv ! "
-            f"video/x-raw, width={self.DIM[0]}, height={self.DIM[1]}, format=BGRx ! "
-            f"videoconvert ! "
-            f"video/x-raw, format=BGR ! appsink drop=1"
+            f"nvvidconv compute-hw=1 ! "
+            f"video/x-raw(memory:NVMM), width={self.DIM[0]}, height={self.DIM[1]}, format=NV12 ! "
+            f"nvvidconv compute-hw=1 ! "
+            f"video/x-raw, format=BGR ! "
+            f"appsink max-buffers=1 drop=true"
         )
 
-    def timer_callback(self):
-        # Drain stale GStreamer buffer frames before grabbing fresh one
-        
-        ret, frame = self.cap.read()
-        if not ret:
-            return
+    def _camera_loop(self):
+        while self._running and rclpy.ok():
+            ret, frame = self.cap.read()
+            if not ret or frame is None:
+                continue
+            self._process_frame(frame)
 
+    def _process_frame(self, frame):
         try:
+            # All three steps stay on GPU inside a single CUDA context
             with vpi.Backend.CUDA:
-                # STEP 1: Fisheye rectification (BGR → BGR, GPU)
+                # STEP 1: Fisheye rectification
                 vpi.asimage(frame).remap(
                     self.vpi_warp_map,
                     interp=vpi.Interp.LINEAR,
                     out=self.vpi_rectified
                 )
-
-                # STEP 2: BGR → Grayscale (GPU)
-                # ArUco only uses grayscale — no point carrying colour any further
+                # STEP 2: BGR → Grayscale
+                # ArUco only needs mono — drop colour now to halve data size
                 self.vpi_rectified.convert(self.vpi_gray)
 
-                # STEP 3: Contrast boost (GPU)
+                # STEP 3: Contrast boost
                 # output = input * scale + offset
-                # Pushes blacks to 0 and whites to 255 — marker edges become razor sharp
                 self.vpi_gray.convert(
                     self.vpi_contrasted,
                     scale=self.contrast_scale,
                     offset=self.contrast_offset
                 )
 
-            # STEP 4: Single download — Jetson unified mem cache flush, not a real copy
+            # STEP 4: Single download (Jetson unified mem — cache flush not real copy)
             final_frame = self.vpi_contrasted.cpu()
 
-            # STEP 5: Publish as mono8
-            # ArUco node does cv_bridge::toCvCopy(msg, MONO8) — this is already MONO8,
-            # so zero conversion happens on the ArUco side
-            now = self.get_clock().now().to_msg()
+            # STEP 5: FPS + pixel stats at 1Hz
+            self._fps_count += 1
+            now = time.time()
+            if now - self._fps_last >= 1.0:
+                self.get_logger().info(
+                    f"📷 fps={self._fps_count} | "
+                    f"pixel min={int(final_frame.min())} "
+                    f"max={int(final_frame.max())} "
+                    f"mean={final_frame.mean():.1f} "
+                    f"(target: min=0 max=255 mean=80-120)"
+                )
+                self._fps_count = 0
+                self._fps_last  = now
+
+            # STEP 6: Publish mono8
+            # ArUco calls toCvCopy(msg, MONO8) — already mono8, zero conversion cost
+            now_msg = self.get_clock().now().to_msg()
             img_msg = self.bridge.cv2_to_imgmsg(final_frame, "mono8")
-            img_msg.header.stamp = now
+            img_msg.header.stamp = now_msg
             img_msg.header.frame_id = self.frame_id
             self.image_pub.publish(img_msg)
 
-            # Camera Info — K matrix is still valid, image is just grayscale now
             info_msg = CameraInfo()
             info_msg.header = img_msg.header
             info_msg.height = self.DIM[1]
@@ -139,6 +167,12 @@ class VPIRectifiedNode(Node):
 
         except Exception as e:
             self.get_logger().error(f"Pipeline Error: {e}")
+
+    def destroy_node(self):
+        self._running = False
+        if self._cam_thread.is_alive():
+            self._cam_thread.join(timeout=2.0)
+        super().destroy_node()
 
 
 def main(args=None):

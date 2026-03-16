@@ -179,7 +179,8 @@ def generate_launch_description():
             'camera_frame': 'camera_optical_frame',
             'filter_alpha_default': 0.3,    # Standard smoothing
             'filter_alpha_small': 0.1
-        }]
+        }],
+        extra_arguments=[{'use_intra_process_comms': True}]
     )
 
 

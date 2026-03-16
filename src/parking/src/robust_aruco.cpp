@@ -53,10 +53,7 @@ public:
                                   * M_PI / 180.0;
 
         rclcpp::QoS qos_profile = rclcpp::QoS(10).reliable();
-        auto qos = rclcpp::QoS(1)
-            .reliability(rclcpp::ReliabilityPolicy::BestEffort)
-            .history(rclcpp::HistoryPolicy::KeepLast);
-        marker_pubs_[id] = this->create_publisher<geometry_msgs::msg::PoseStamped>(topic_name, qos);
+        
 
         info_sub_ = this->create_subscription<sensor_msgs::msg::CameraInfo>(
             "/camera/camera_info", qos_profile,
@@ -127,15 +124,14 @@ private:
                 fps_start_time_  = this->get_clock()->now();
             }
 
-            cv_bridge::CvImagePtr cv_ptr;
+            cv_bridge::CvImageConstPtr cv_ptr;
             try {
-                auto cv_ptr = cv_bridge::toCvShare(msg, sensor_msgs::image_encodings::MONO8);
-                cv::Mat debug_img = cv_ptr->image.clone();
+                cv_ptr = cv_bridge::toCvShare(msg, sensor_msgs::image_encodings::MONO8);
             } catch (cv_bridge::Exception& e) {
                 RCLCPP_ERROR(this->get_logger(), "cv_bridge exception: %s", e.what());
                 return;
             }
-            if (cv_ptr->image.empty()) return;
+            if (!cv_ptr || cv_ptr->image.empty()) return;
 
             // ----------------------------------------------------------------
             // POSE ESTIMATION — only runs every N frames
@@ -241,8 +237,9 @@ private:
             // DEBUG IMAGE — every N*2 frames, always shows last known detections
             // ----------------------------------------------------------------
             if (frame_counter_ % (process_every_n_frames_ * 2) == 0) {
+                cv::Mat debug_img = cv_ptr->image.clone(); 
                 if (!last_ids_.empty()) {
-                    cv::aruco::drawDetectedMarkers(cv_ptr->image, last_corners_, last_ids_);
+                    cv::aruco::drawDetectedMarkers(debug_img, last_corners_, last_ids_);
 
                     for (size_t i = 0; i < last_ids_.size(); i++) {
                         int current_id      = last_ids_[i];
@@ -259,12 +256,13 @@ private:
 
                             cv::Vec3d rvec_draw;
                             cv::Rodrigues(rot_mat, rvec_draw);
-                            cv::drawFrameAxes(cv_ptr->image, camera_matrix_, dist_coeffs_,
+                            cv::drawFrameAxes(debug_img, camera_matrix_, dist_coeffs_,
                                               rvec_draw, filters_[current_id].tvec, current_size);
                         }
-                    }
+                    }   
                 }
-                debug_pub_->publish(*cv_ptr->toImageMsg());
+               debug_pub_->publish(
+                *cv_bridge::CvImage(msg->header, "mono8", debug_img).toImageMsg());
             }
 
         } catch (const std::exception& e) {
@@ -277,7 +275,11 @@ private:
     void ensure_publisher_exists(int id) {
         if (marker_pubs_.find(id) == marker_pubs_.end()) {
             std::string topic_name = "/aruco/marker_" + std::to_string(id);
-            marker_pubs_[id] = this->create_publisher<geometry_msgs::msg::PoseStamped>(topic_name, 10);
+            auto qos = rclcpp::QoS(1)
+                .reliability(rclcpp::ReliabilityPolicy::BestEffort)
+                .history(rclcpp::HistoryPolicy::KeepLast);
+            marker_pubs_[id] = this->create_publisher<geometry_msgs::msg::PoseStamped>(topic_name, qos);
+
         }
     }
 

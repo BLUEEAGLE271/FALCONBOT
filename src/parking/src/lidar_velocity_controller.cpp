@@ -88,7 +88,7 @@ public:
             });
         // --- NEW: IMU PUBLISHER ---
         imu_pub_ = this->create_publisher<sensor_msgs::msg::Imu>("/imu/data", 10);
-        
+        pwm_pub_ = this->create_publisher<std_msgs::msg::String>("/motor_pwm", 10);
         mission_trigger_pub_ = this->create_publisher<std_msgs::msg::Bool>("/mission/trigger", 10);
         // --- TIMERS ---
         // Timer 1: Control Loop (Write Commands) - 20Hz
@@ -138,6 +138,7 @@ private:
     rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr mission_trigger_pub_;
     rclcpp::TimerBase::SharedPtr control_timer_;
     rclcpp::TimerBase::SharedPtr read_timer_;
+    rclcpp::Publisher<std_msgs::msg::String>::SharedPtr pwm_pub_;
 
     void update_pid_params() {
         kp_v_ = this->get_parameter("kp_v").as_double();
@@ -311,88 +312,74 @@ private:
         double dt = (now - last_time_).seconds();
         last_time_ = now;
 
-        double final_pwm_left = 0.0;
+        double final_pwm_left  = 0.0;
         double final_pwm_right = 0.0;
 
-
-        double error = target_linear_ - current_linear_;
-        double output_mps = 0.0; 
-
-        // --- SMC TUNING PARAMETERS ---
-        // (You can later move these to your declare_parameter block)
-                 // Boundary Layer Thickness (smooths out the 20Hz chatter)
-
         if (std::abs(target_linear_) < 0.01 && std::abs(target_angular_) < 0.01) {
+            // Reset integrators on stop
             integral_v_ = 0.0;
             integral_w_ = 0.0;
             prev_error_v_ = 0.0;
             prev_error_w_ = 0.0;
+            // final_pwm stays 0 — stop command will be sent below
         } else {
-            // --- 1. NEURAL NETWORK FEED-FORWARD ---
+            // 1. NN generates base PWM from raw target velocity
             std::vector<double> inputs = {target_linear_, target_angular_};
             auto h1 = relu(matmul_add(w1_, inputs, b1_));
             auto h2 = relu(matmul_add(w2_, h1, b2_));
-            auto y = matmul_add(w3_, h2, b3_);
-            
-            double ff_left = y[0] * 255.0;
-            double ff_right = y[1] * 255.0;
+            auto y  = matmul_add(w3_, h2, b3_);
 
-            // --- 2. PID CORRECTIVE TRIM ---
+            double base_pwm_left  = y[0] * 255.0;
+            double base_pwm_right = y[1] * 255.0;
+
+            // 2. PID trims the PWM output directly — gains in PWM/velocity units
+            // kp_v=50 means: 1 m/s error → add 50 PWM correction
             double error_v = target_linear_ - current_linear_;
             integral_v_ += error_v * dt;
-            // Anti-windup cap
-            if (integral_v_ > 2.0) {integral_v_ = 2.0; }
-            if (integral_v_ < -2.0) {integral_v_ = -2.0;}
-            
+            integral_v_ = std::clamp(integral_v_, -50.0 / ki_v_, 50.0 / ki_v_);
             double deriv_v = (error_v - prev_error_v_) / dt;
-            double pid_v = (kp_v_ * error_v) + (ki_v_ * integral_v_) + (kd_v_ * deriv_v);
+            double pid_v = (kp_v_ * error_v)
+                        + (ki_v_ * integral_v_)
+                        + (kd_v_ * deriv_v);   // output is in PWM units
             prev_error_v_ = error_v;
 
             double error_w = target_angular_ - current_angular_;
             integral_w_ += error_w * dt;
-            // Anti-windup cap
-            if (integral_w_ > 2.0) {integral_w_ = 2.0; }
-            if (integral_w_ < -2.0) {integral_w_ = -2.0; }
-
+            integral_w_ = std::clamp(integral_w_, -50.0 / kw_v_, 50.0 / kw_v_);
             double deriv_w = (error_w - prev_error_w_) / dt;
-            double pid_w = (kp_w_ * error_w) + (ki_w_ * integral_w_) + (kd_w_ * deriv_w);
+            double pid_w = (kp_w_ * error_w)
+                        + (ki_w_ * integral_w_)
+                        + (kd_w_ * deriv_w);   // output is in PWM units
             prev_error_w_ = error_w;
 
-            // --- 3. THE MIXER ---
-            final_pwm_left = ff_left + pid_v - pid_w;
-            final_pwm_right = ff_right + pid_v + pid_w;
+            // 3. Add PID trim to NN base PWM
+            final_pwm_left  = base_pwm_left  + pid_v - pid_w;
+            final_pwm_right = base_pwm_right + pid_v + pid_w;
 
-            // Clamp hardware limits
-            if (final_pwm_left > 255.0) final_pwm_left = 255.0;
-            if (final_pwm_left < -255.0) final_pwm_left = -255.0;
-            if (final_pwm_right > 255.0) final_pwm_right = 255.0;
-            if (final_pwm_right < -255.0) final_pwm_right = -255.0;
+            final_pwm_left  = std::clamp(final_pwm_left,  -255.0, 255.0);
+            final_pwm_right = std::clamp(final_pwm_right, -255.0, 255.0);
         }
 
-        // DEBUG PRINT: Placed AFTER math to show the true output
-        /* RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 50, 
-            "LOG | L_Tgt: %.2f L_Meas: %.2f | A_Tgt: %.2f A_Meas: %.2f | OUT: %.2f", 
-            target_linear_, current_linear_, target_angular_, current_angular_, output_mps);
-        // --- CALL TO ACTION ---
-        // Triggers when the SMC successfully forces the robot to the target speed
-        if (std::abs(error) < 0.05 && std::abs(target_linear_) > 0) {
-            RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 2000, 
-                ">>> TARGET VELOCITY LOCKED: READY TO COMMENCE PARKING SEQUENCE! <<<");
-        } */
-
+        // Serial write and PWM publish are OUTSIDE if/else
+        // This guarantees the stop command (PWM=0) is always sent
         char buffer[64];
-        int len = snprintf(buffer, sizeof(buffer), "{\"T\":11,\"L\":%.0f,\"R\":%.0f}\n", 
+        int len = snprintf(buffer, sizeof(buffer), "{\"T\":11,\"L\":%.0f,\"R\":%.0f}\n",
                         final_pwm_left, final_pwm_right);
 
-        // Only send if there's actually a command, OR if we need to send a stop command once
         static bool last_was_zero = false;
-        bool current_is_zero = (std::abs(final_pwm_left) < 1.0 && std::abs(final_pwm_right) < 1.0);
+        bool current_is_zero = (std::abs(final_pwm_left) < 1.0 &&
+                                std::abs(final_pwm_right) < 1.0);
 
         if (serial_fd_ != -1 && (!current_is_zero || !last_was_zero)) {
             write(serial_fd_, buffer, len);
+            std_msgs::msg::String pwm_msg;
+            pwm_msg.data = std::to_string((int)final_pwm_left) + ","
+                        + std::to_string((int)final_pwm_right);
+            pwm_pub_->publish(pwm_msg);
         }
         last_was_zero = current_is_zero;
-    }
+    }  // ← closing brace for control_loop
+    
 };
 
 int main(int argc, char **argv)

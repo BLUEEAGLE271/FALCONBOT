@@ -26,7 +26,7 @@ public:
         cv::setUseOptimized(true);
 
         this->declare_parameter("marker_size_default", 0.094);
-        this->declare_parameter("marker_size_small", 0.0378);
+        this->declare_parameter("marker_size_small", 0.0849);
         this->declare_parameter("small_marker_id", 3);
         this->declare_parameter("target_id", 1);
         this->declare_parameter("camera_frame", "camera_optical_frame");
@@ -115,13 +115,13 @@ private:
             fps_frame_count_++;
             double elapsed = (this->get_clock()->now() - fps_start_time_).seconds();
             if (elapsed >= 1.0) {
-                RCLCPP_INFO(this->get_logger(),
-                    "Camera: %d fps | ArUco processing: %d fps | Markers visible: %zu",
-                    fps_frame_count_,
-                    fps_frame_count_ / process_every_n_frames_,
-                    last_ids_.size());
-                fps_frame_count_ = 0;
-                fps_start_time_  = this->get_clock()->now();
+                // RCLCPP_INFO(this->get_logger(),
+                //     "Camera: %d fps | ArUco processing: %d fps | Markers visible: %zu",
+                //     fps_frame_count_,
+                //     fps_frame_count_ / process_every_n_frames_,
+                //     last_ids_.size());
+                // fps_frame_count_ = 0;
+                // fps_start_time_  = this->get_clock()->now();
             }
 
             cv_bridge::CvImageConstPtr cv_ptr;

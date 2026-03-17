@@ -183,8 +183,7 @@ def generate_launch_description():
             'camera_frame': 'camera_optical_frame',
             'filter_alpha_default': 0.3,    # Standard smoothing
             'filter_alpha_small': 0.1
-        }],
-        extra_arguments=[{'use_intra_process_comms': True}]
+        }]
     )
 
 
@@ -206,10 +205,13 @@ def generate_launch_description():
         output='screen',
         parameters=[{
             'serial_port': '/dev/esp32',
-            'max_linear_speed': 1.0,
-            'smc_lambda': 3.0,   # Equivalent to old Ki, closes the steady-state gap
-            'smc_k': 0.6,        # The raw "Punch" voltage to break static friction
-            'smc_phi': 0.5      # The smoothing layer to prevent 20Hz vibration
+            'max_linear_speed': 0.4,
+            'kp_v': 40.0,
+            'ki_v': 960.0,
+            'kd_v': 0.0,
+            'kp_w': 36.0,
+            'ki_w': 144.0,
+            'kd_w': 0.0,  # The smoothing layer to prevent 20Hz vibration
         }]
     )
 
@@ -253,7 +255,7 @@ def generate_launch_description():
         TimerAction(period=6.0, actions=[slam_node]),
 
         # # # 4. Wait 10s for Map to build, then start Nav2
-        #TimerAction(period=8.0, actions=[nav2_launch]),
+        TimerAction(period=8.0, actions=[nav2_launch]),
         TimerAction(period=15.0, actions=[OpaqueFunction(function=pin_processes)]),
 
         # # # 5. Finally, start your logic

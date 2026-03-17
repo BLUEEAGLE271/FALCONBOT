@@ -86,14 +86,12 @@ class VPIRectifiedNode(Node):
         )
 
     def gstreamer_pipeline(self, sensor_id=0):
-        # max-buffers=1 drop=true: appsink discards stale frames at hardware level
-        # No grab() loop needed in Python — this handles it properly
         return (
-            f"nvarguscamerasrc sensor-id={sensor_id} ! "
+            f"nvarguscamerasrc sensor-id={sensor_id} sensor-mode=0 ! "
             f"video/x-raw(memory:NVMM), width=3280, height=2464, framerate=15/1 ! "
-            f"nvvidconv compute-hw=1 ! "
-            f"video/x-raw(memory:NVMM), width={self.DIM[0]}, height={self.DIM[1]}, format=NV12 ! "
-            f"nvvidconv compute-hw=1 ! "
+            f"nvvidconv ! "
+            f"video/x-raw, width={self.DIM[0]}, height={self.DIM[1]}, format=BGRx ! "
+            f"videoconvert ! "
             f"video/x-raw, format=BGR ! "
             f"appsink max-buffers=1 drop=true"
         )
@@ -134,13 +132,13 @@ class VPIRectifiedNode(Node):
             self._fps_count += 1
             now = time.time()
             if now - self._fps_last >= 1.0:
-                self.get_logger().info(
-                    f"📷 fps={self._fps_count} | "
-                    f"pixel min={int(final_frame.min())} "
-                    f"max={int(final_frame.max())} "
-                    f"mean={final_frame.mean():.1f} "
-                    f"(target: min=0 max=255 mean=80-120)"
-                )
+                # self.get_logger().info(
+                #     f"📷 fps={self._fps_count} | "
+                #     f"pixel min={int(final_frame.min())} "
+                #     f"max={int(final_frame.max())} "
+                #     f"mean={final_frame.mean():.1f} "
+                #     f"(target: min=0 max=255 mean=80-120)"
+                # )
                 self._fps_count = 0
                 self._fps_last  = now
 

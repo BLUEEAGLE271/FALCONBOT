@@ -345,7 +345,7 @@ private:
 
             double error_w = target_angular_ - current_angular_;
             integral_w_ += error_w * dt;
-            integral_w_ = std::clamp(integral_w_, -50.0 / kw_v_, 50.0 / kw_v_);
+            integral_w_ = std::clamp(integral_w_, -50.0 / ki_w_, 50.0 / ki_w_);
             double deriv_w = (error_w - prev_error_w_) / dt;
             double pid_w = (kp_w_ * error_w)
                         + (ki_w_ * integral_w_)

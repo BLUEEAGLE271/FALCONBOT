@@ -28,7 +28,7 @@ class BoxEstimator(Node):
         self.BOX_WIDTH  = 0.20
         self.half_L = self.BOX_LENGTH / 2.0
         self.half_W = self.BOX_WIDTH / 2.0
-        self.APPROACH_DIST = 0.4
+        self.APPROACH_DIST = 0.7
 
         self.target_ids = [0, 1, 2, 3]
         self.navigation_started = False
@@ -246,7 +246,7 @@ class BoxEstimator(Node):
                 )
 
             # --- PRECISION STATE MACHINE ---
-            if m_id == 3 and dist_cam_to_marker <= 0.7 and not self.precision_mode:
+            if m_id == 3 and dist_cam_to_marker <= 1.0 and not self.precision_mode:
                 self.precision_mode = True
                 self.APPROACH_DIST = 0.15
                 self.get_logger().info(

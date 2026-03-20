@@ -4,9 +4,13 @@ from launch import LaunchDescription
 from launch.actions import IncludeLaunchDescription, TimerAction, OpaqueFunction
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.actions import Node
+from launch_ros.actions import ComposableNodeContainer
+from launch_ros.descriptions import ComposableNode
+
 import subprocess, psutil
+
 ##Bash commands
-##colcon build --symlink-install   --allow-overriding cv_bridge image_geometry --parallel-workers 2
+##colcon build --symlink-install --parallel-workers 2
 ##source install/setup.bash
 ##ros2 launch parking mission.launch.py
 ##ros2 topic pub --once /start_mission std_msgs/msg/Bool "{data: true}"
@@ -112,6 +116,35 @@ def generate_launch_description():
             'params_file': os.path.join(my_pkg, 'config', 'my_nav2_params.yaml') # Use your TEB config!
         }.items()
     )
+    apriltag_node = ComposableNodeContainer(
+        name='apriltag_container',
+        namespace='',
+        package='rclcpp_components',
+        executable='component_container',
+        composable_node_descriptions=[
+            ComposableNode(
+                package='isaac_ros_apriltag',
+                plugin='nvidia::isaac_ros::apriltag::AprilTagNode',
+                name='apriltag',
+                parameters=[{
+                    'size':      0.094,
+                    'max_tags':  4,
+                    'tile_size': 4,
+                }],
+                remappings=[
+                    ('image',       '/image'),
+                    ('camera_info', '/camera_info'),
+                ],
+            )
+        ],
+        output='screen',
+    )
+
+    tracker_node = Node(
+        package='parking',
+        executable='apriltag_tracker',
+        name='apriltag_tracker',
+    )
 
     #
 
@@ -170,21 +203,7 @@ def generate_launch_description():
        remappings=[('odometry/filtered', '/odom')]
     )
 
-    aruco_node = Node(
-        package='parking',           # Your package
-        executable='robust_aruco',   # Your new C++ executable
-        name='robust_aruco',
-        output='screen',
-        parameters=[{
-            'marker_size_default': 0.094,    # IDs 0, 1, 2
-            'marker_size_small': 0.0849,    # Your new ID 3 size
-            'small_marker_id': 3,           # Identifies which one is unique
-            'target_id': 1,
-            'camera_frame': 'camera_optical_frame',
-            'filter_alpha_default': 0.3,    # Standard smoothing
-            'filter_alpha_small': 0.1
-        }]
-    )
+
 
 
     goal_masking_node = Node(
@@ -237,7 +256,7 @@ def generate_launch_description():
         camera_tf,
         lidar_launch,
         camera_launch,
-        aruco_node,
+        
         scan_republisher_node,
         goal_masking_node,
         velocity_controller_node,
@@ -248,6 +267,9 @@ def generate_launch_description():
         
         # 2. Wait 3s for Lidar to spin up, then start Odom
         TimerAction(period=2.0, actions=[rf2o_node]),
+
+        TimerAction(period=3.0, actions=[apriltag_node]),   # after camera is up
+        TimerAction(period=5.0, actions=[tracker_node]),
         
         TimerAction(period=4.0, actions=[robot_localization_node]),
 

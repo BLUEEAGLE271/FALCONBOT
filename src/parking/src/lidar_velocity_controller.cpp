@@ -38,6 +38,7 @@ public:
         this->declare_parameter("kp_w", 3.0);
         this->declare_parameter("ki_w", 0.0);
         this->declare_parameter("kd_w", 0.0);
+        this->declare_parameter("max_pwm_rate", 20.0);
 
         update_pid_params();
 
@@ -52,6 +53,7 @@ public:
                     if (param.get_name() == "kp_w") kp_w_ = param.as_double();
                     if (param.get_name() == "ki_w") ki_w_ = param.as_double();
                     if (param.get_name() == "kd_w") kd_w_ = param.as_double();
+                    if (param.get_name() == "max_pwm_rate") max_pwm_rate_ = param.as_double();
                 }
                 return result;
             });
@@ -120,6 +122,9 @@ private:
     double kp_w_, ki_w_, kd_w_;
     double integral_v_ = 0.0, prev_error_v_ = 0.0;
     double integral_w_ = 0.0, prev_error_w_ = 0.0;
+    double pwm_left_prev_  = 0.0;   // ← add
+    double pwm_right_prev_ = 0.0;   // ← add
+    double max_pwm_rate_   = 20.0;  // ← add — max PWM change per 50ms cycle
     OnSetParametersCallbackHandle::SharedPtr parameter_callback_handle_;
     rclcpp::Time last_time_;
 
@@ -147,6 +152,7 @@ private:
         kp_w_ = this->get_parameter("kp_w").as_double();
         ki_w_ = this->get_parameter("ki_w").as_double();
         kd_w_ = this->get_parameter("kd_w").as_double();
+        max_pwm_rate_ = this->get_parameter("max_pwm_rate").as_double();
     }
 
     std::vector<double> relu(const std::vector<double>& x) {
@@ -321,6 +327,8 @@ private:
             integral_w_ = 0.0;
             prev_error_v_ = 0.0;
             prev_error_w_ = 0.0;
+            pwm_left_prev_  = 0.0;   // ← add
+            pwm_right_prev_ = 0.0;   // ← add  
             // final_pwm stays 0 — stop command will be sent below
         } else {
             // 1. NN generates base PWM from raw target velocity
@@ -358,6 +366,18 @@ private:
 
             final_pwm_left  = std::clamp(final_pwm_left,  -255.0, 255.0);
             final_pwm_right = std::clamp(final_pwm_right, -255.0, 255.0);
+            double delta_left  = std::clamp(
+                final_pwm_left  - pwm_left_prev_,
+                -max_pwm_rate_, max_pwm_rate_);
+            double delta_right = std::clamp(
+                final_pwm_right - pwm_right_prev_,
+                -max_pwm_rate_, max_pwm_rate_);
+
+            pwm_left_prev_  += delta_left;
+            pwm_right_prev_ += delta_right;
+
+            final_pwm_left  = pwm_left_prev_;
+            final_pwm_right = pwm_right_prev_;
         }
 
         // Serial write and PWM publish are OUTSIDE if/else

@@ -29,7 +29,8 @@ setup(
             'rectified_parking = parking.rectified_parking:main',
             'box_estimator = parking.box_estimator:main',
             'mission_controller = parking.mission_controller:main',
-            'pwm_data_collector = parking.pwm_data_collector:main'
+            'pwm_data_collector = parking.pwm_data_collector:main',
+            'apriltag_tracker = parking.apriltag_tracker:main'
         ],
     },
 )

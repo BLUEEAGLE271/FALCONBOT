@@ -18,10 +18,9 @@ find_package(nlohmann_json REQUIRED)
 # New Deps for Masking Node & ArUco
 find_package(geometry_msgs REQUIRED) 
 find_package(tf2_ros REQUIRED)
-find_package(tf2 REQUIRED)              # Added for robust_aruco
+find_package(cv_bridge REQUIRED)
+find_package(OpenCV REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
-find_package(cv_bridge REQUIRED)        # Added for robust_aruco
-find_package(OpenCV REQUIRED COMPONENTS core highgui imgproc objdetect calib3d)         # Added for robust_aruco
 
 # Crucial: Find the Python cmake helper
 find_package(ament_cmake_python REQUIRED)
@@ -44,6 +43,8 @@ install(TARGETS
   DESTINATION lib/${PROJECT_NAME}
 )
 
+
+
 # =========================================================
 # 2.5 Build the GOAL MASKING NODE
 # =========================================================
@@ -64,16 +65,7 @@ install(TARGETS
 # =========================================================
 # 2.6 Build the ROBUST ARUCO NODE (The new addition)
 # =========================================================
-add_executable(robust_aruco src/robust_aruco.cpp)
-ament_target_dependencies(robust_aruco
-  rclcpp
-  sensor_msgs
-  geometry_msgs
-  cv_bridge
-  tf2_ros
-  tf2
-  tf2_geometry_msgs
-)
+
 
 add_executable(video_streamer src/streamer_node.cpp)
 ament_target_dependencies(video_streamer
@@ -90,12 +82,8 @@ install(TARGETS
 
 
 # Explicitly link OpenCV libraries (ament dependencies handle the others)
-target_link_libraries(robust_aruco ${OpenCV_LIBS})
 
-install(TARGETS
-  robust_aruco
-  DESTINATION lib/${PROJECT_NAME}
-)
+
 
 # =========================================================
 # 3. Install Python Modules (The 'parking' folder)
@@ -115,6 +103,12 @@ install(PROGRAMS
   parking/box_estimator.py
   DESTINATION lib/${PROJECT_NAME}
   RENAME box_estimator
+)
+
+install(PROGRAMS
+  parking/apriltag_tracker.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME apriltag_tracker
 )
 
 install(PROGRAMS

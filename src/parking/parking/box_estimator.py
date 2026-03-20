@@ -107,7 +107,7 @@ class BoxEstimator(Node):
         for m_id in self.target_ids:
             sub = self.create_subscription(
                 PoseStamped,
-                f'/aruco/marker_{m_id}',
+                f'/apriltag/marker_{m_id}',
                 lambda msg, mid=m_id: self.detection_callback(msg, mid),
                 marker_qos,
                 callback_group=self.cb_group

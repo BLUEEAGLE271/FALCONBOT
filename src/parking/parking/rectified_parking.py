@@ -29,8 +29,8 @@ class VPIRectifiedNode(Node):
         self.bridge   = CvBridge()
 
         # --- CONFIGURATION ---
-        self.scale_factor = 0.5
-        self.DIM = (1640, 1232)  # After 0.5x scaling: 1640x1232
+        self.scale_factor = 0.25
+        self.DIM = (820, 616)  # After 0.25x scaling: 820x1232
 
         self.K = np.array([
             [1813.000558 * self.scale_factor, 0., 1634.163912 * self.scale_factor],
@@ -87,15 +87,14 @@ class VPIRectifiedNode(Node):
     def gstreamer_pipeline(self, sensor_id=0):
         return (
             f"nvarguscamerasrc sensor-id={sensor_id} "
-            f"sensor-mode=0 "                           # widest angle, 3280x2464
-            f"exposuretimerange='13000 60000' "
-            f"gainrange='1 2' ! "
-            f"video/x-raw(memory:NVMM), "
-            f"width=3280, height=2464 ! "  # sensor-mode=0 max is 21fps
+            f"exposuretimerange='13000 60000' gainrange='1 2' ! "
+            f"video/x-raw(memory:NVMM), width=3280, height=2464, framerate=21/1 ! "
             f"nvvidconv compute-hw=1 ! "
             f"video/x-raw(memory:NVMM), "
-            f"width={self.DIM[0]}, height={self.DIM[1]}, format=NV12, framerate=15/1 ! "
+            f"width={self.DIM[0]}, height={self.DIM[1]}, format=NV12 ! "
             f"nvvidconv compute-hw=1 ! "
+            f"video/x-raw, format=BGRx ! "
+            f"videoconvert ! "
             f"video/x-raw, format=BGR ! "
             f"appsink max-buffers=1 drop=true"
         )

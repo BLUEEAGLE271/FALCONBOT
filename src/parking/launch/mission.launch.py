@@ -127,9 +127,10 @@ def generate_launch_description():
                 plugin='nvidia::isaac_ros::apriltag::AprilTagNode',
                 name='apriltag',
                 parameters=[{
-                    'size':      0.094,
+                    'size':      0.1,
                     'max_tags':  4,
                     'tile_size': 4,
+                    'tag_family': 'tag36h11'
                 }],
                 remappings=[
                     ('image',       '/image'),

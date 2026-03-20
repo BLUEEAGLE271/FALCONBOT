@@ -206,11 +206,11 @@ def generate_launch_description():
         parameters=[{
             'serial_port': '/dev/esp32',
             'max_linear_speed': 0.4,
-            'kp_v': 40.0,
-            'ki_v': 960.0,
+            'kp_v': 0.0,
+            'ki_v': 0.0,
             'kd_v': 0.0,
-            'kp_w': 36.0,
-            'ki_w': 144.0,
+            'kp_w': 0.0,
+            'ki_w': 0.0,
             'kd_w': 0.0,  # The smoothing layer to prevent 20Hz vibration
         }]
     )

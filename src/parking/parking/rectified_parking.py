@@ -37,8 +37,8 @@ class VPIRectifiedNode(Node):
         # Tune:
         #   Still grey/washed out  → raise scale to 3.0, offset to -120
         #   Whites blown out       → lower offset to -80
-        self.contrast_scale  = 2.5
-        self.contrast_offset = -100.0
+        self.contrast_scale  = 2.2
+        self.contrast_offset = -80.0
 
         # --- 3. VPI WARP MAP (CUDA) ---
         self.get_logger().info("Initializing VPI Hardware Maps...")

@@ -349,7 +349,7 @@ class AprilTagTracker(Node):
  
     # ------------------------------------------------------------------
     # PUBLISHERS
-    # ------------------------------------------------------------------
+    # visual
  
     def _publish_marker(self, tvec, quat, header, m_id):
         msg                   = PoseStamped()

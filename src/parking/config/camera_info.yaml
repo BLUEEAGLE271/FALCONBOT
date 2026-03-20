@@ -1,0 +1,20 @@
+image_width: 3280
+image_height: 2464
+camera_name: "camera_optical_frame"
+camera_matrix:
+  rows: 3
+  cols: 3
+  data: [906.5, 0, 817.08, 0, 913.31, 629.3, 0, 0, 1]
+distortion_model: "equidistant"
+distortion_coefficients:
+  rows: 1
+  cols: 4
+  data: [-0.022401, -0.022708, 0.014203, -0.009313]
+rectification_matrix:
+  rows: 3
+  cols: 3
+  data: [1., 0., 0., 0., 1., 0., 0., 0., 1.]
+projection_matrix:
+  rows: 3
+  cols: 4
+  data: [1813.000558, 0., 1634.163912, 0., 0., 1826.621610, 1258.598589, 0., 0., 0., 1., 0.]

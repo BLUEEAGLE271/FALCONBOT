@@ -13,6 +13,7 @@ import subprocess, psutil
 ##colcon build --symlink-install --parallel-workers 2
 ##source install/setup.bash
 ##ros2 launch parking mission.launch.py
+##ros2 launch parking mission.launch.py 2>&1 | grep --line-buffered -v "Frame drop"
 ##ros2 topic pub --once /start_mission std_msgs/msg/Bool "{data: true}"
 
 def pin_processes(context, *args, **kwargs):
@@ -54,6 +55,40 @@ def generate_launch_description():
     camera_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(os.path.join(my_pkg, 'launch', 'camera.launch.py'))
     )
+
+    camera_node = ComposableNode(
+        name='argus_camera',
+        package='isaac_ros_argus_camera',
+        plugin='nvidia::isaac_ros::argus::ArgusMonoNode',
+        parameters=[{
+            'camera_id': 0,
+            'camera_mode': 2, # Equivalent to sensor-mode=0
+            'fps': 15,
+            'camera_info_url': 'file://' + os.path.join(my_pkg, 'config', 'camera_info.yaml'),
+            'output_encoding': 'mono8' # AprilTag only needs mono, save bandwidth
+        }],
+        remappings=[
+            ('left/image_raw', '/image_raw'),
+            ('left/camera_info', '/camera_info')
+        ]
+    )
+
+    rectify_node = ComposableNode(
+        name='image_rectify',
+        package='isaac_ros_image_proc',
+        plugin='nvidia::isaac_ros::image_proc::RectifyNode',
+        parameters=[{
+            'output_width': 820,
+            'output_height': 616,
+        }],
+        remappings=[
+            ('image_raw', '/image_raw'),
+            ('camera_info', '/camera_info'),
+            ('image_rect', '/image_rect'),
+            ('camera_info_rect', '/camera_info_rect')
+        ]
+    )
+
 
     # B. TF: Robot Center (base_link) -> LiDAR
     # Offset: x = -0.045 meters (4.5cm behind center)
@@ -116,29 +151,50 @@ def generate_launch_description():
             'params_file': os.path.join(my_pkg, 'config', 'my_nav2_params.yaml') # Use your TEB config!
         }.items()
     )
-    apriltag_node = ComposableNodeContainer(
-        name='apriltag_container',
+    apriltag_node = ComposableNode(
+        package='isaac_ros_apriltag',
+        plugin='nvidia::isaac_ros::apriltag::AprilTagNode',
+        name='apriltag',
+        parameters=[{
+            'size':      0.135,
+            'max_tags':  4,
+            'tile_size': 4,
+            'tag_family': 'tag36h11',
+            'publish_tag_transforms': False  # <--- ADD THIS LINE
+        }],
+        remappings=[
+            ('image',       '/image_rect'),       # Connects to rectify_node output
+            ('camera_info', '/camera_info_rect'), # Connects to rectify_node output
+            ('tag_detections', '/tag_detections') # Your Python tracker listens here
+        ],
+    )
+
+    h264_encoder_node = ComposableNode(
+    name='h264_encoder',
+    package='isaac_ros_h264_encoder',
+    plugin='nvidia::isaac_ros::h264_encoder::EncoderNode',
+    parameters=[{
+        'input_width': 1640,
+        'input_height': 1232,
+    }],
+    remappings=[
+        ('image_raw', '/image_rect'), # Grab the uncompressed GPU frame from the rectifier
+        ('image_compressed', '/video_stream/h264') # Output hardware H.264
+    ]
+    )
+
+    nitros_container = ComposableNodeContainer(
+        name='nitros_container',
         namespace='',
         package='rclcpp_components',
-        executable='component_container',
+        executable='component_container_mt',
         composable_node_descriptions=[
-            ComposableNode(
-                package='isaac_ros_apriltag',
-                plugin='nvidia::isaac_ros::apriltag::AprilTagNode',
-                name='apriltag',
-                parameters=[{
-                    'size':      0.1,
-                    'max_tags':  4,
-                    'tile_size': 4,
-                    'tag_family': 'tag36h11'
-                }],
-                remappings=[
-                    ('image',       '/image'),
-                    ('camera_info', '/camera_info'),
-                ],
-            )
+            camera_node,
+            rectify_node,
+            apriltag_node,
         ],
         output='screen',
+        arguments=['--ros-args', '--log-level', 'ERROR']
     )
 
     tracker_node = Node(
@@ -242,10 +298,21 @@ def generate_launch_description():
     output='screen'
     )
 
-    video_stream_node = Node(
-    package='web_video_server',
-    executable='web_video_server',
-    name='web_video_server',
+    # video_stream_node = Node(
+    # package='web_video_server',
+    # executable='web_video_server',
+    # name='web_video_server',
+    # )
+
+
+
+    foxglove_bridge_node = Node(
+        package='foxglove_bridge',
+        executable='foxglove_bridge',
+        name='foxglove_bridge',
+        parameters=[{
+            'port': 8765, 
+        }]
     )
 
    
@@ -256,20 +323,20 @@ def generate_launch_description():
         lidar_ghost_tf,
         camera_tf,
         lidar_launch,
-        camera_launch,
-        
+        #camera_launch,
+        nitros_container,
         scan_republisher_node,
         goal_masking_node,
         velocity_controller_node,
-        #video_streamer_node,
-        video_stream_node,
+        video_streamer_node,
+        #video_stream_node,
+        #foxglove_bridge_node,
         
 
         
         # 2. Wait 3s for Lidar to spin up, then start Odom
         TimerAction(period=2.0, actions=[rf2o_node]),
 
-        TimerAction(period=3.0, actions=[apriltag_node]),   # after camera is up
         TimerAction(period=5.0, actions=[tracker_node]),
         
         TimerAction(period=4.0, actions=[robot_localization_node]),

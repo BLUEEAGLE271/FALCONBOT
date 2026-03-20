@@ -18,7 +18,7 @@ class VideoStreamer : public rclcpp::Node {
 public:
     VideoStreamer() : Node("video_streamer") {
         subscription_ = this->create_subscription<sensor_msgs::msg::Image>(
-            "/tag_detections_image", 10, std::bind(&VideoStreamer::image_callback, this, std::placeholders::_1));
+            "/image_raw", 10, std::bind(&VideoStreamer::image_callback, this, std::placeholders::_1));
         // Start HTTP Server Thread
         server_thread_ = std::thread(&VideoStreamer::run_server, this);
         RCLCPP_INFO(this->get_logger(), "MJPEG Streamer started on port 8080 at /stream.mjpg");

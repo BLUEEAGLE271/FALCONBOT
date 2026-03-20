@@ -90,7 +90,7 @@ class BoxEstimator(Node):
         self.local_footprint_pub  = self.create_publisher(Polygon, '/local_costmap/footprint', 10)
         self.global_footprint_pub = self.create_publisher(Polygon, '/global_costmap/footprint', 10)
         self.rviz_goal_pub        = self.create_publisher(PoseStamped, '/visual_target_goal', 10)
-
+        self.debug_goal_pub = self.create_publisher(PoseStamped, '/box_estimator/debug_goal', 10)
         # Extended TF buffer — 30s prevents SLAM hiccups from causing
         # lookup failures that force fallback to latest transform
         self.tf_buffer   = Buffer(cache_time=rclpy.duration.Duration(seconds=30.0))
@@ -255,12 +255,32 @@ class BoxEstimator(Node):
                     f"prec_buf={len(self.precision_buffer)}/{self.PRECISION_BUFFER_SIZE} | "
                     f"rough_sent={self.rough_goal_sent} | locked={self.docking_locked}"
                 )
+                
+
 
             # ==============================================================
             # PHASE 2 — PRECISION MODE
             # Triggered once when marker 3 is within PRECISION_TRIGGER_DIST
             # Collects PRECISION_BUFFER_SIZE frames then sends ONE final goal
             # ==============================================================
+
+            approach       = self.APPROACH_DIST_PRECISION if self.precision_mode \
+                    else self.APPROACH_DIST_ROUGH
+            debug_goal_x   = curr_x + approach * math.cos(curr_yaw)
+            debug_goal_y   = curr_y + approach * math.sin(curr_yaw)
+            debug_goal_yaw = curr_yaw + math.pi
+            debug_msg                    = PoseStamped()
+            debug_msg.header.stamp       = self.get_clock().now().to_msg()
+            debug_msg.header.frame_id    = "odom"
+            debug_msg.pose.position.x    = debug_goal_x
+            debug_msg.pose.position.y    = debug_goal_y
+            debug_msg.pose.position.z    = 0.0
+            q_d = tft.quaternion_from_euler(0, 0, debug_goal_yaw)
+            debug_msg.pose.orientation.x = q_d[0]
+            debug_msg.pose.orientation.y = q_d[1]
+            debug_msg.pose.orientation.z = q_d[2]
+            debug_msg.pose.orientation.w = q_d[3]
+            self.rviz_goal_pub.publish(debug_msg)
             if m_id == 3 and dist_cam_to_marker <= self.PRECISION_TRIGGER_DIST \
                     and not self.precision_mode:
                 self.precision_mode = True

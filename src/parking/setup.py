@@ -26,7 +26,7 @@ setup(
     # The CMakeLists 'install(PROGRAMS...)' handles the executables.
     entry_points={
         'console_scripts': [
-            'rectified_parking = parking.rectified_parking:main',
+            #'rectified_parking = parking.rectified_parking:main',
             'box_estimator = parking.box_estimator:main',
             'mission_controller = parking.mission_controller:main',
             'pwm_data_collector = parking.pwm_data_collector:main',

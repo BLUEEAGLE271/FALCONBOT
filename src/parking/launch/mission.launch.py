@@ -205,7 +205,7 @@ def generate_launch_description():
         output='screen',
         parameters=[{
             'serial_port': '/dev/esp32',
-            'max_linear_speed': 0.4,
+            'max_linear_speed': 0.8,
             'kp_v': 0.0,
             'ki_v': 0.0,
             'kd_v': 0.0,
@@ -236,13 +236,13 @@ def generate_launch_description():
         lidar_ghost_tf,
         camera_tf,
         lidar_launch,
-        camera_launch,
-        aruco_node,
+        #camera_launch,
+        #aruco_node,
         scan_republisher_node,
         goal_masking_node,
         velocity_controller_node,
         #video_streamer_node,
-        video_stream_node,
+        #video_stream_node,
         
 
         
@@ -261,7 +261,7 @@ def generate_launch_description():
         # # # 5. Finally, start your logic
         TimerAction(period=25.0, actions=[
              mission_control_node,
-             box_estimator_node,
+             #box_estimator_node,
              #explore_node
          ])
     ])

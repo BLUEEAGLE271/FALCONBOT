@@ -120,6 +120,9 @@ private:
     double kp_w_, ki_w_, kd_w_;
     double integral_v_ = 0.0, prev_error_v_ = 0.0;
     double integral_w_ = 0.0, prev_error_w_ = 0.0;
+    double pwm_left_prev_  = 0.0;   // ← add
+    double pwm_right_prev_ = 0.0;   // ← add
+    double max_pwm_rate_   = 10.0;  // ← add — max PWM change per 50ms cycle
     OnSetParametersCallbackHandle::SharedPtr parameter_callback_handle_;
     rclcpp::Time last_time_;
 
@@ -321,6 +324,8 @@ private:
             integral_w_ = 0.0;
             prev_error_v_ = 0.0;
             prev_error_w_ = 0.0;
+            pwm_left_prev_  = 0.0;   // ← add
+            pwm_right_prev_ = 0.0;   // ← add  
             // final_pwm stays 0 — stop command will be sent below
         } else {
             // 1. NN generates base PWM from raw target velocity
@@ -329,8 +334,8 @@ private:
             auto h2 = relu(matmul_add(w2_, h1, b2_));
             auto y  = matmul_add(w3_, h2, b3_);
 
-            double base_pwm_left  = y[0] * 255.0;
-            double base_pwm_right = y[1] * 255.0;
+            double base_pwm_left  = y[0] * 250.0;
+            double base_pwm_right = y[1] * 250.0;
 
             // 2. PID trims the PWM output directly — gains in PWM/velocity units
             // kp_v=50 means: 1 m/s error → add 50 PWM correction
@@ -358,6 +363,8 @@ private:
 
             final_pwm_left  = std::clamp(final_pwm_left,  -255.0, 255.0);
             final_pwm_right = std::clamp(final_pwm_right, -255.0, 255.0);
+
+            
         }
 
         // Serial write and PWM publish are OUTSIDE if/else

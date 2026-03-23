@@ -11,14 +11,13 @@ bt_navigator:
     global_frame: map
     robot_base_frame: base_link
     odom_topic: /odom
-    bt_loop_duration: 10
+    bt_loop_duration: 50
     default_server_timeout: 20
     enable_groot_monitoring: True
     groot_zmq_publisher_port: 1666
     groot_zmq_server_port: 1667
     #default_nav_to_pose_bt_xml: "/opt/ros/humble/share/nav2_bt_navigator/behavior_trees/navigate_to_pose_w_replanning_and_recovery.xml"
     default_nav_to_pose_bt_xml: "/home/blueeagle/ros2_ws/src/parking/config/follow_dynamic.xml"
-    default_nav_through_poses_bt_xml: "/opt/ros/humble/share/nav2_bt_navigator/behavior_trees/navigate_through_poses_w_replanning_and_recovery.xml"
     plugin_lib_names:
       - nav2_assisted_teleop_action_bt_node
       - nav2_assisted_teleop_cancel_bt_node
@@ -93,22 +92,22 @@ controller_server:
     general_goal_checker:
       stateful: True
       plugin: "nav2_controller::SimpleGoalChecker"
-      xy_goal_tolerance: 0.04
+      xy_goal_tolerance: 0.05
       yaw_goal_tolerance: 0.3
 
     FollowPath:
       plugin: "nav2_mppi_controller::MPPIController"
       transform_tolerance: 0.5
-      time_steps: 50
+      time_steps: 80
       trajectory_point_step: 1
       model_dt: 0.05
-      publish_optimal_trajectory: True
-      visualize: True
-      batch_size: 300
+      publish_optimal_trajectory: false
+      visualize: false
+      batch_size: 1000
       use_sim_time: False
       gamma: 0.015
       iteration_count: 1
-      prune_distance: 0.5
+      prune_distance: 2.0
       use_unordered_multithreading: true
       regenerate_noises: false      # Biggest single CPU saving
       # ... (keep your time_steps, batch_size, etc.) ...
@@ -119,21 +118,21 @@ controller_server:
       # 2. DEFINE THE GEOMETRY (The "Cheat" Prevention)
       # This is the strict physical constraint you asked for.
       AckermannConstraints:
-        min_turning_r: 0.2       # The robot CANNOT turn tighter than this (0.5m radius)
+        min_turning_r: 0.3       # The robot CANNOT turn tighter than this (0.5m radius)
       
       # 3. SPEEDS (Mouse Mode)
-      vx_max: 0.35
-      vx_min: 0.05    # You NEED reverse to park with Ackermann (like a car parallel parking)
-      wz_max: 1.8     # Max rotation speed
+      vx_max: 0.4
+      vx_min: 0.0    # You NEED reverse to park with Ackermann (like a car parallel parking)
+      wz_max: 1.2     # Max rotation speed
 
       vx_std: 0.1
       vy_std: 0.0  # Must be 0 for DiffDrive
-      wz_std: 0.8
+      wz_std: 0.3
       
       # 4. CRITICS (Tuned for Arcs)
       # We remove 'PathAngleCritic' because it often tempts the robot to spin in place to fix heading.
       #critics: ["ConstraintCritic","CostCritic","PathAngleCritic","PathAlignCritic","PathFollowCritic","ObstaclesCritic", "GoalCritic", "GoalAngleCritic", "PreferForwardCritic"]
-      critics: ["PathFollowCritic","PathAlignCritic","ConstraintCritic","ObstaclesCritic"]
+      critics: ["PathFollowCritic","PathAlignCritic","ConstraintCritic","GoalCritic", "GoalAngleCritic","ObstaclesCritic"]
       # ... (ObstaclesCritic, GoalCritic etc. remain same as before) ...
       ConstraintCritic:
         enabled: true
@@ -151,10 +150,11 @@ controller_server:
       # CRITICAL: This critic forces the robot to align with the path using curves, not spins.
       PathAlignCritic:
         enabled: true
-        cost_power: 1
-        cost_weight: 3.0
-        max_path_occupancy_ratio: 0.05
+        cost_power: 2
+        cost_weight: 10.0
+        trajectory_point_step: 1
         threshold_to_consider: 0.5
+        offset_from_furthest: 2
         use_path_orientation: true
       
       PathAngleCritic:
@@ -162,7 +162,7 @@ controller_server:
         cost_power: 1
         cost_weight: 2.0
         offset_from_furthest: 4
-        threshold_to_consider: 0.8
+        threshold_to_consider: 0.5
         max_angle_to_furthest: 1.0
         forward_preference: true
         use_path_orientations: true
@@ -171,14 +171,14 @@ controller_server:
       GoalAngleCritic:
         enabled: true
         cost_power: 1
-        cost_weight: 10.0   # How strongly it cares about the final angle
-        threshold_to_consider: 0.3 # Only start worrying about the angle when within 0.5m of the goal
+        cost_weight: 5.0   # How strongly it cares about the final angle
+        threshold_to_consider: 0.5 # Only start worrying about the angle when within 0.5m of the goal
 
       GoalCritic:
         enabled: true
         cost_power: 1
-        cost_weight: 10.0
-        threshold_to_consider: 0.3
+        cost_weight: 5.0
+        threshold_to_consider: 0.5
 
       ObstaclesCritic:
         enabled: true
@@ -191,15 +191,15 @@ controller_server:
       PathFollowCritic:
         enabled: true
         cost_power: 1
-        cost_weight: 15.0
-        offset_from_furthest: 3
-        threshold_to_consider: 0.8
+        cost_weight: 8.0
+        offset_from_furthest: 2
+        threshold_to_consider: 0.4
 
       PreferForwardCritic:
         enabled: false
         cost_power: 1
         cost_weight: 0.1
-        threshold_to_consider: 0.8
+        threshold_to_consider: 0.5
 
 local_costmap:
   local_costmap:
@@ -240,8 +240,8 @@ local_costmap:
 global_costmap:
   global_costmap:
     ros__parameters:
-      update_frequency: 0.5
-      publish_frequency: 0.5
+      update_frequency: 1.0
+      publish_frequency: 1.0
       global_frame: map
       robot_base_frame: base_link
       use_sim_time: False
@@ -298,15 +298,15 @@ planner_server:
       max_on_approach_iterations: 1000
       max_planning_time: 3.0
       motion_model_for_search: "DUBIN" # <--- "DUBIN" = Forward Only (No Reversing)
-      non_straight_penalty: 1.2        # (Was 1.2) Punish turning
-      cost_travel_multiplier: 5.0     # (Was 2.0) Punish long paths (loops are long)
-      change_penalty: 10.0              # Punish changing from straight to turn
+      non_straight_penalty: 100.0        # (Was 1.2) Punish turning
+      cost_travel_multiplier: 1.0     # (Was 2.0) Punish long paths (loops are long)
+      change_penalty: 50.0              # Punish changing from straight to turn
       retrospective_penalty: 0.0
       analytic_expansion_ratio: 3.5 
       analytic_expansion_max_length: 2.5
       angle_quantization_bins: 144
-      minimum_turning_radius: 0.4     # <--- MUST match your controller's radius
-      reverse_penalty: 5.0
+      minimum_turning_radius: 0.5     # <--- MUST match your controller's radius
+      reverse_penalty: 100.0
       
       
       
@@ -338,7 +338,7 @@ robot_state_publisher:
 
 waypoint_follower:
   ros__parameters:
-    loop_rate: 5
+    loop_rate: 20
     stop_on_failure: false
     waypoint_task_executor_plugin: "wait_at_waypoint"   
     wait_at_waypoint:

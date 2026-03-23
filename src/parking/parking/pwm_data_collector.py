@@ -19,7 +19,7 @@ class DataCollector(Node):
         
         # ROS Publishers and Subscribers
         self.serial_pub = self.create_publisher(String, '/esp32_write', 10)
-        self.odom_sub = self.create_subscription(Odometry, 'odom_rf2o', self.odom_cb, 10)
+        self.odom_sub = self.create_subscription(Odometry, 'odom', self.odom_cb, 10)
         self.imu_sub = self.create_subscription(Imu, '/imu/data', self.imu_cb, 10)
 
         # Velocity Storage
@@ -30,7 +30,8 @@ class DataCollector(Node):
 
         # 1. Generate Custom PWM Combinations (Positive Only)
         # 0 to 120 in steps of 40, then 130 to 250 in steps of 10
-        pwm_values = list(range(0, 121, 40)) + list(range(130, 260, 10))
+        #pwm_values = list(range(0, 81, 20)) + list(range(80, 260, 10))
+        pwm_values = list(range(240, 260, 10))
         all_combinations = [(l, r) for l in pwm_values for r in pwm_values]
 
         # 2. Resume Logic: Check existing CSV

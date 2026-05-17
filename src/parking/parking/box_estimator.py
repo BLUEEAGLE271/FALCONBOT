@@ -168,17 +168,15 @@ class BoxEstimator(Node):
             return mat
 
         # Marker 1 — Left Face (+Y)
-        self.marker_transforms[1] = make_mat(
-            [0.0, self.half_W, 0.2], [-1, 0, 0], [0, 0, 1], [0, 1, 0])
+        
+        self.marker_transforms[1] = make_mat([0.0, half_W, 0.2], [1, 0, 0], [0, 0, -1], [0, 1, 0])
         # Marker 0 — Right Face (-Y)
-        self.marker_transforms[0] = make_mat(
-            [0.0, -self.half_W, 0.2], [1, 0, 0], [0, 0, 1], [0, -1, 0])
+        
+        self.marker_transforms[0] = make_mat([0.0, -half_W, 0.2], [-1, 0, 0], [0, 0, 1], [0, -1, 0])
         # Marker 2 — Back Face (-X)
-        self.marker_transforms[2] = make_mat(
-            [-self.half_L, 0.0, 0.2], [0, 1, 0], [0, 0, 1], [1, 0, 0])
+        self.marker_transforms[2] = make_mat([-half_L, 0.0, 0.2], [0, 1, 0], [0, 0, -1], [-1, 0, 0])
         # Marker 3 — Front Face (+X)
-        self.marker_transforms[3] = make_mat(
-            [self.half_L - 0.06, 0.0, 0.2], [0, -1, 0], [0, 0, 1], [-1, 0, 0])
+        self.marker_transforms[3] = make_mat([ half_L, 0.0, 0.2], [0, 1, 0], [0, 0, 1], [1, 0, 0])
 
     # ------------------------------------------------------------------
     # CORE POSE ESTIMATION

@@ -117,6 +117,11 @@ install(PROGRAMS
   RENAME mission_controller
 )
 
+install(PROGRAMS
+  parking/pose_dashboard.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME pose_dashboard
+)
 
 # =========================================================
 # 5. Install Launch and Config files

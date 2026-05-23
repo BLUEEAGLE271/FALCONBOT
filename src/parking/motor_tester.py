@@ -85,6 +85,9 @@ def _reader_thread() -> None:
                 'right_target': float(parts[2]),
                 'right_actual': float(parts[3]),
             }
+            if len(parts) >= 6:
+                row['left_pwm']  = float(parts[4])
+                row['right_pwm'] = float(parts[5])
         except ValueError:
             continue
 
@@ -101,6 +104,18 @@ def _send_velocity(linear_x: float, angular_z: float) -> None:
     """Send CMD_ROS_CTRL — ESP32 converts X/Z to per-wheel PWM internally."""
     cmd = f'{{"T":13,"X":{linear_x:.3f},"Z":{angular_z:.3f}}}\n'
     _ser.write(cmd.encode('ascii'))
+
+
+def _hold_velocity(linear_x: float, angular_z: float, duration: float, interval: float = 0.2) -> None:
+    """Re-send the velocity command every `interval` seconds for `duration` seconds.
+    Prevents the ESP32 safety timeout from zeroing the target mid-test."""
+    end = time.monotonic() + duration
+    while True:
+        _send_velocity(linear_x, angular_z)
+        remaining = end - time.monotonic()
+        if remaining <= 0:
+            break
+        time.sleep(min(interval, remaining))
 
 
 def _send_pid(p: float, i: float, d: float) -> None:
@@ -129,18 +144,14 @@ def _stop_recording() -> list[dict]:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def test_step_response() -> tuple[list, str]:
-    """Stress-test the PID at the 85 % software ceiling (0.66 m/s).
-    A clean step to the limit proves the controller stabilises without
-    overshooting into the physical saturation zone (0.785 m/s).
-    """
-    print('\n[TEST 1] Step Response — software ceiling stress test')
-    print('         X: 0.0 → 0.66 m/s → 0.0   Z: 0.0')
-    print('         Limit: 0.66 m/s (85 %)  |  Physical max: 0.785 m/s')
+    """Step response test at 0.5 m/s (Z=0.0)."""
+    print('\n[TEST 1] Step Response')
+    print('         X: 0.0 → 0.50 m/s → 0.0   Z: 0.0')
     _start_recording()
 
-    _send_velocity(0.0,  0.0);  time.sleep(1.0)
-    _send_velocity(0.66, 0.0);  time.sleep(3.0)
-    _send_velocity(0.0,  0.0);  time.sleep(1.0)
+    _hold_velocity(0.0, 0.0, 1.0)
+    _hold_velocity(0.5, 0.0, 4.0)
+    _hold_velocity(0.0, 0.0, 1.0)
 
     rows = _stop_recording()
     print(f'  Captured {len(rows)} samples.')
@@ -148,18 +159,21 @@ def test_step_response() -> tuple[list, str]:
 
 
 def test_zero_radius_turn() -> tuple[list, str]:
-    """X=0.0, Z=1.5 rad/s for 3 s.
-    If the chassis oscillates excessively, reduce Z via the PID menu
-    before re-running — 1.5 is the default per kinematic spec.
-    """
+    """X=0.0, user-chosen Z rad/s for 3 s."""
     print('\n[TEST 2] Zero-Radius Turn')
-    print('         X: 0.0   Z: 0.0 → 1.5 rad/s → 0.0')
-    print('         (lower Z via option 4 if chassis oscillates)')
+    try:
+        z_str = input('  Angular velocity Z (rad/s) [default 1.5]: ').strip()
+        z_val = float(z_str) if z_str else 1.5
+    except ValueError:
+        print('  Invalid input — using 1.5 rad/s.')
+        z_val = 1.5
+
+    print(f'         X: 0.0   Z: 0.0 → {z_val} rad/s → 0.0')
     _start_recording()
 
-    _send_velocity(0.0, 0.0);  time.sleep(1.0)
-    _send_velocity(0.0, 1.5);  time.sleep(3.0)
-    _send_velocity(0.0, 0.0);  time.sleep(1.0)
+    _hold_velocity(0.0, 0.0, 1.0)
+    _hold_velocity(0.0, z_val, 3.0)
+    _hold_velocity(0.0, 0.0, 1.0)
 
     rows = _stop_recording()
     print(f'  Captured {len(rows)} samples.')
@@ -167,31 +181,36 @@ def test_zero_radius_turn() -> tuple[list, str]:
 
 
 def test_ramp_profile() -> tuple[list, str]:
-    """Ramp X from 0.0 to 0.66 m/s in 0.11 m/s steps every 200 ms (Z=0.0).
-    Hold at 0.66 for 2 s, then ramp back down in the same increments.
-    Six steps up / six steps down — total ramp time 1.2 s each way.
+    """Two identical ramp cycles (Z=0.0 throughout):
+      t 0–1 s : idle at 0.0
+      t 1–2 s : ramp up   0.1 → 0.5  (5 steps × 200 ms)
+      t 2–3 s : hold at 0.5
+      t 3–4 s : ramp down 0.4 → 0.0  (5 steps × 200 ms)
+      t 4–5 s : ramp up   (repeat)
+      t 5–6 s : hold
+      t 6–7 s : ramp down (repeat)
+      t 7–8 s : idle at 0.0
     """
-    # 0.11 × 6 = 0.66 exactly — no floating-point drift from repeated addition.
-    STEPS_UP   = [round(0.11 * n, 10) for n in range(1, 7)]   # 0.11 … 0.66
-    STEPS_DOWN = list(reversed(STEPS_UP[:-1])) + [0.0]         # 0.55 … 0.0
+    # 5 steps × 0.1 m/s × 200 ms = exactly 1.0 s per ramp edge.
+    STEPS_UP   = [round(0.1 * n, 10) for n in range(1, 6)]   # 0.1 … 0.5
+    STEPS_DOWN = list(reversed(STEPS_UP[:-1])) + [0.0]        # 0.4 … 0.0
 
-    print('\n[TEST 3] Ramp Profile')
-    print(f'         Up:   {[f"{v:.2f}" for v in STEPS_UP]}  (×200 ms)')
-    print(f'         Hold: 0.66 m/s for 2 s')
-    print(f'         Down: {[f"{v:.2f}" for v in STEPS_DOWN]}  (×200 ms)')
+    print('\n[TEST 3] Double Ramp Profile')
+    print(f'         Up:   {[f"{v:.1f}" for v in STEPS_UP]}  (×200 ms = 1 s)')
+    print(f'         Hold: 0.5 m/s for 1 s  ×2 cycles')
+    print(f'         Down: {[f"{v:.1f}" for v in STEPS_DOWN]}  (×200 ms = 1 s)')
     _start_recording()
 
-    _send_velocity(0.0, 0.0);  time.sleep(1.0)
+    _hold_velocity(0.0, 0.0, 1.0)          # t 0–1  idle
 
-    for v in STEPS_UP:                             # ramp up to 0.66
-        _send_velocity(v, 0.0);  time.sleep(0.2)
+    for _ in range(2):                      # two identical cycles
+        for v in STEPS_UP:                  # ramp up   (1 s)
+            _hold_velocity(v, 0.0, 0.2)
+        _hold_velocity(0.5, 0.0, 1.0)      # hold      (1 s)
+        for v in STEPS_DOWN:               # ramp down (1 s)
+            _hold_velocity(v, 0.0, 0.2)
 
-    _send_velocity(0.66, 0.0);  time.sleep(2.0)    # hold at ceiling
-
-    for v in STEPS_DOWN:                           # ramp down to 0.0
-        _send_velocity(v, 0.0);  time.sleep(0.2)
-
-    _send_velocity(0.0, 0.0);  time.sleep(1.0)
+    _hold_velocity(0.0, 0.0, 1.0)          # t 7–8  idle
 
     rows = _stop_recording()
     print(f'  Captured {len(rows)} samples.')
@@ -218,11 +237,11 @@ def _step_stats(df: pd.DataFrame) -> dict:
     Settling time is measured from step application (t ≈ 1.0 s).
     """
     T_STEP      = 1.0    # nominal step-apply time
-    T_STEP_END  = 4.0    # nominal step-end time
+    T_STEP_END  = 5.0    # nominal step-end time
     BAND_PCT    = 0.02   # ±2 % of target
 
     step_mask   = (df['t'] >= T_STEP)  & (df['t'] < T_STEP_END)
-    steady_mask = (df['t'] >= 2.5)     & (df['t'] < T_STEP_END)
+    steady_mask = (df['t'] >= 3.5)     & (df['t'] < T_STEP_END)
     step_df     = df[step_mask]
 
     result = {}
@@ -288,6 +307,18 @@ def _style_ax(ax) -> None:
     ax.title.set_color('white')
 
 
+def _ideal_target(t_arr: np.ndarray, target_arr: np.ndarray, test_name: str) -> np.ndarray:
+    """Smooth piecewise-linear reference for plotting.
+    Ramp profile: replaces discrete step staircase with clean diagonals.
+    All other tests: returns target_arr unchanged."""
+    if test_name != 'ramp_profile':
+        return target_arr
+    peak = float(np.max(np.abs(target_arr)))
+    t_ref = [0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
+    v_ref = [0.0, 0.0, peak, peak, 0.0, 0.0, peak, peak, 0.0]
+    return np.interp(t_arr, t_ref, v_ref)
+
+
 def save_and_plot(rows: list[dict], test_name: str) -> None:
     if not rows:
         print('  No data — skipping save.')
@@ -341,7 +372,8 @@ def save_and_plot(rows: list[dict], test_name: str) -> None:
         (ax_r, 'right', _RED,   _YELL,  'Right Wheel'),
     ]
     for ax, side, c_target, c_actual, label in plot_specs:
-        ax.plot(df['t'], df[f'{side}_target'],
+        t_smooth = _ideal_target(df['t'].to_numpy(), df[f'{side}_target'].to_numpy(), test_name)
+        ax.plot(df['t'], t_smooth,
                 color=c_target, linewidth=1.8, linestyle='--',
                 label='Target', alpha=0.9)
         ax.plot(df['t'], df[f'{side}_actual'],

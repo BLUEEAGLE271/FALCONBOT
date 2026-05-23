@@ -116,15 +116,19 @@ def generate_launch_description():
                    '--child-frame-id', 'base_laser_nav']
     )
 
-    # C. TF: base_link -> Camera
+    # C. TF: base_link -> camera
+    # Only connect base_link → camera here. The Isaac ROS camera node already
+    # publishes camera → camera_optical, so we must not re-parent camera_optical
+    # or TF gets two unconnected trees.
     camera_tf = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
         name='camera_tf_publisher',
+        # Apply standard optical rotation: Yaw -90 deg, Roll -90 deg
         arguments=['--x', '0.126', '--y', '0', '--z', '0',
                    '--yaw', '-1.5708', '--pitch', '0', '--roll', '-1.5708',
                    '--frame-id', 'base_link',
-                   '--child-frame-id', 'camera_optical_frame']
+                   '--child-frame-id', 'camera_optical'] # Make sure this matches the tag header!
     )
 
     # --- SLAM ---
@@ -154,7 +158,7 @@ def generate_launch_description():
         plugin='nvidia::isaac_ros::apriltag::AprilTagNode',
         name='apriltag',
         parameters=[{
-            'size':      0.135,
+            'size':      0.103,
             'max_tags':  4,
             'tile_size': 4,
             'tag_family': 'tag36h11',
@@ -299,8 +303,17 @@ def generate_launch_description():
         }]
     )
 
+    mock_odom_tf = Node(
+        package='tf2_ros',
+        executable='static_transform_publisher',
+        name='mock_odom_tf',
+        arguments=['0', '0', '0', '0', '0', '0', 'odom', 'base_link']
+    )
+
+
     return LaunchDescription([
         # --- ACTIVE FOR VISION TEST ---
+        mock_odom_tf,
         camera_tf,
         nitros_container,
         TimerAction(period=3.0, actions=[tracker_node]),

@@ -51,7 +51,7 @@ from flask import Flask, Response, render_template_string, jsonify, request
 # ── Constants ─────────────────────────────────────────────────────────────────
 IMAGE_TOPIC     = '/image_rect'
 BOX_POSE_TOPIC  = '/box_center_pose'
-OUTPUT_DIR      = os.path.expanduser('~/ros2_ws/src/parking/results')
+OUTPUT_DIR      = os.path.expanduser('~/ros2_ws/src/parking/results/pose_estimation')
 WEB_PORT      = 5000
 STREAM_FPS    = 15
 MARKER_TIMEOUT_S = 1.5   # marker considered lost after this many seconds
@@ -98,11 +98,12 @@ _HTML = r"""<!DOCTYPE html>
   }
   .row { display: flex; gap: 12px; margin-bottom: 12px; align-items: center; }
   label { color: var(--muted); font-size: 12px; }
-  select {
+  select, input[type="number"] {
     background: var(--bg); color: var(--text);
     border: 1px solid var(--border); border-radius: 6px;
     padding: 6px 10px; font-size: 14px; flex: 1;
   }
+  input[type="number"]::-webkit-inner-spin-button { opacity: 0.5; }
   /* ── Alignment Indicator ── */
   #indicator {
     border-radius: 8px; padding: 18px 12px; text-align: center;
@@ -178,24 +179,12 @@ _HTML = r"""<!DOCTYPE html>
     <h2>Test Configuration</h2>
 
     <div class="row">
-      <label>Target Distance</label>
-      <select id="target_dist">
-        <option value="1.0">1.0 m</option>
-        <option value="1.5" selected>1.5 m</option>
-        <option value="2.0">2.0 m</option>
-        <option value="2.5">2.5 m</option>
-        <option value="3.0">3.0 m</option>
-      </select>
+      <label>Target Distance (m)</label>
+      <input type="number" id="target_dist" value="1.5" min="0.1" max="10" step="0.1">
     </div>
     <div class="row">
-      <label>Target Angle</label>
-      <select id="target_angle">
-        <option value="0" selected>0°</option>
-        <option value="30">30°</option>
-        <option value="45">45°</option>
-        <option value="60">60°</option>
-        <option value="90">90°</option>
-      </select>
+      <label>Target Angle (°)</label>
+      <input type="number" id="target_angle" value="0" min="-180" max="180" step="1">
     </div>
 
     <!-- Alignment Indicator -->
@@ -265,8 +254,8 @@ _HTML = r"""<!DOCTYPE html>
 let _countdownId = null;
 let _sessions    = [];
 
-function getTargetDist()  { return parseFloat(document.getElementById('target_dist').value); }
-function getTargetAngle() { return parseFloat(document.getElementById('target_angle').value); }
+function getTargetDist()  { return parseFloat(document.getElementById('target_dist').value)  || 1.5; }
+function getTargetAngle() { return parseFloat(document.getElementById('target_angle').value) || 0.0; }
 
 function normalizeAngle(deg) {
   while (deg >  180) deg -= 360;
@@ -542,8 +531,7 @@ class PoseDashboardNode(Node):
     def _box_pose_callback(self, msg: PoseStamped):
         """
         Fired for every /box_center_pose message published by box_estimator.
-        Extracts X (forward distance), Y (lateral), and Yaw directly from the
-        PoseStamped. Drives the live indicator and the recording buffer.
+        Pose is in odom frame: position.x/y are the box's map coordinates.
         """
         p = msg.pose.position
         o = msg.pose.orientation

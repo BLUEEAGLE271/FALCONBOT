@@ -30,7 +30,8 @@ setup(
             'box_estimator = parking.box_estimator:main',
             'mission_controller = parking.mission_controller:main',
             'pwm_data_collector = parking.pwm_data_collector:main',
-            'apriltag_tracker = parking.apriltag_tracker:main'
+            'apriltag_tracker = parking.apriltag_tracker:main',
+            'pose_dashboard = parking.pose_dashboard:main',
         ],
     },
 )

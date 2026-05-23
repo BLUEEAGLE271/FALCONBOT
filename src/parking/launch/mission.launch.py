@@ -20,20 +20,29 @@ def pin_processes(context, *args, **kwargs):
     for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
         try:
             cmd = ' '.join(proc.info['cmdline'] or [])
-            if 'controller_server' in cmd:
-                subprocess.run(['taskset', '-cp', '2,3,4,5', str(proc.pid)])
-            elif 'planner_server' in cmd:
-                subprocess.run(['taskset', '-cp', '2,3,4,5', str(proc.pid)])
-            elif 'slam_toolbox' in cmd:
-                subprocess.run(['taskset', '-cp', '0,1', str(proc.pid)])
-            elif 'rf2o' in cmd:
-                subprocess.run(['taskset', '-cp', '0,1', str(proc.pid)])
-            elif 'aruco' in cmd:
-                subprocess.run(['taskset', '-cp', '0,1', str(proc.pid)])
-            elif 'box_estimator' in cmd:
-                subprocess.run(['taskset', '-cp', '4,5', str(proc.pid)])
-            elif 'rectified_parking' in cmd:
-                subprocess.run(['taskset', '-cp', '4', str(proc.pid)])
+            pid = str(proc.pid)
+
+            # Priority 1 — Odometry: VIP core, highest OS priority
+            # rf2o and EKF must never be preempted by planning/vision work
+            if 'rf2o' in cmd or 'ekf_node' in cmd:
+                subprocess.run(['taskset', '-cp', '2', pid])
+                subprocess.run(['renice', '-n', '-10', '-p', pid])
+
+            # Priority 2 — MPPI local planner: dedicated cores for multithreading
+            elif 'controller_server' in cmd:
+                subprocess.run(['taskset', '-cp', '3,4,5', pid])
+
+            # Priority 3 — Vision pipeline: GPU-backed Isaac ROS container,
+            # box estimator, and AprilTag tracker share the same core pair
+            elif ('component_container_mt' in cmd
+                  or 'box_estimator' in cmd
+                  or 'apriltag_tracker' in cmd):
+                subprocess.run(['taskset', '-cp', '4,5', pid])
+
+            # Priority 4 — Background: global planner and SLAM are latency-tolerant
+            elif 'planner_server' in cmd or 'slam_toolbox' in cmd:
+                subprocess.run(['taskset', '-cp', '0,1', pid])
+
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             pass
     return []
@@ -46,9 +55,7 @@ def generate_launch_description():
     ##slam_pkg = get_package_share_directory('slam_toolbox')
     my_pkg = get_package_share_directory('parking')
 
-    # --- 1. HARDWARE (Lidar + Camera + TF) ---
-    # Launch LD19 Lidar
-# A. Launch Sensors
+    # A. Launch Sensors
     lidar_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(os.path.join(lidar_pkg, 'launch', 'ld19.launch.py'))
     )
@@ -62,10 +69,10 @@ def generate_launch_description():
         plugin='nvidia::isaac_ros::argus::ArgusMonoNode',
         parameters=[{
             'camera_id': 0,
-            'camera_mode': 2, # Equivalent to sensor-mode=0
+            'camera_mode': 2,
             'fps': 15,
             'camera_info_url': 'file://' + os.path.join(my_pkg, 'config', 'camera_info.yaml'),
-            'output_encoding': 'mono8' # AprilTag only needs mono, save bandwidth
+            'output_encoding': 'mono8'
         }],
         remappings=[
             ('left/image_raw', '/image_raw'),
@@ -89,68 +96,59 @@ def generate_launch_description():
         ]
     )
 
-
-    # B. TF: Robot Center (base_link) -> LiDAR
-    # Offset: x = -0.045 meters (4.5cm behind center)
-    # Ensure 'base_laser' matches the frame_id in your ld19 launch file (check RViz if dots don't appear)
-# This node will publish the transform at 10Hz with a CURRENT timestamp
-    # This solves the 0.1Hz bottleneck by satisfying the MessageFilter's time requirement
+    # B. TF: base_link -> LiDAR
     lidar_tf = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
         name='lidar_tf_publisher',
-        arguments=['--x', '0.08', '--y', '0', '--z', '0', 
-                   '--yaw', '1.5708', '--pitch', '0', '--roll', '0', 
-                   '--frame-id', 'base_link', 
+        arguments=['--x', '0.08', '--y', '0', '--z', '0',
+                   '--yaw', '1.5708', '--pitch', '0', '--roll', '0',
+                   '--frame-id', 'base_link',
                    '--child-frame-id', 'base_laser']
     )
 
     lidar_ghost_tf = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
-        arguments=['--x', '0.08', '--y', '0', '--z', '0', 
-                   '--yaw', '-1.5708', '--pitch', '0', '--roll', '0', 
-                   '--frame-id', 'base_link', 
+        arguments=['--x', '0.08', '--y', '0', '--z', '0',
+                   '--yaw', '-1.5708', '--pitch', '0', '--roll', '0',
+                   '--frame-id', 'base_link',
                    '--child-frame-id', 'base_laser_nav']
     )
 
-    # C. TF: Robot Center (base_link) -> Camera
-    # Position: 0,0,0 (Assuming base_link IS the camera location)
-    # Rotation: -90 Yaw, -90 Roll (To align Optical Z with Robot X)
+    # C. TF: base_link -> Camera
     camera_tf = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
         name='camera_tf_publisher',
-        arguments=['--x', '0.126', '--y', '0', '--z', '0', 
-                   '--yaw', '-1.5708', '--pitch', '0', '--roll', '-1.5708', 
-                   '--frame-id', 'base_link', 
+        arguments=['--x', '0.126', '--y', '0', '--z', '0',
+                   '--yaw', '-1.5708', '--pitch', '0', '--roll', '-1.5708',
+                   '--frame-id', 'base_link',
                    '--child-frame-id', 'camera_optical_frame']
     )
 
-    
-    # --- 2. SLAM (Mapping) ---
+    # --- SLAM ---
     slam_node = Node(
         package='slam_toolbox',
         executable='async_slam_toolbox_node',
         name='slam_toolbox',
         output='screen',
-        parameters=[os.path.join(my_pkg, 'config', 'my_slam_params.yaml'), 
+        parameters=[os.path.join(my_pkg, 'config', 'my_slam_params.yaml'),
                    {'use_sim_time': False}],
-        # THE NUCLEAR OPTION: Run with lower priority
-        prefix=['nice -n 10'] 
+        prefix=['nice -n 10']
     )
 
-    # --- 3. NAV2 (Path Planning) ---
-    # We delay Nav2 by 5 seconds to ensure SLAM is ready
+    # --- NAV2 ---
     nav2_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(os.path.join(nav2_pkg, 'launch', 'navigation_launch.py')),
         launch_arguments={
             'use_sim_time': 'false',
-            'autostart': 'True',   # <--- ADD THIS LINE EXACTLY LIKE THIS
+            'autostart': 'True',
             'use_composition': 'False',
-            'params_file': os.path.join(my_pkg, 'config', 'my_nav2_params.yaml') # Use your TEB config!
+            'params_file': os.path.join(my_pkg, 'config', 'my_nav2_params.yaml')
         }.items()
     )
+
     apriltag_node = ComposableNode(
         package='isaac_ros_apriltag',
         plugin='nvidia::isaac_ros::apriltag::AprilTagNode',
@@ -160,27 +158,27 @@ def generate_launch_description():
             'max_tags':  4,
             'tile_size': 4,
             'tag_family': 'tag36h11',
-            'publish_tag_transforms': False  # <--- ADD THIS LINE
+            'publish_tag_transforms': False
         }],
         remappings=[
-            ('image',       '/image_rect'),       # Connects to rectify_node output
-            ('camera_info', '/camera_info_rect'), # Connects to rectify_node output
-            ('tag_detections', '/tag_detections') # Your Python tracker listens here
+            ('image',       '/image_rect'),
+            ('camera_info', '/camera_info_rect'),
+            ('tag_detections', '/tag_detections')
         ],
     )
 
     h264_encoder_node = ComposableNode(
-    name='h264_encoder',
-    package='isaac_ros_h264_encoder',
-    plugin='nvidia::isaac_ros::h264_encoder::EncoderNode',
-    parameters=[{
-        'input_width': 1640,
-        'input_height': 1232,
-    }],
-    remappings=[
-        ('image_raw', '/image_rect'), # Grab the uncompressed GPU frame from the rectifier
-        ('image_compressed', '/video_stream/h264') # Output hardware H.264
-    ]
+        name='h264_encoder',
+        package='isaac_ros_h264_encoder',
+        plugin='nvidia::isaac_ros::h264_encoder::EncoderNode',
+        parameters=[{
+            'input_width': 1640,
+            'input_height': 1232,
+        }],
+        remappings=[
+            ('image_raw', '/image_rect'),
+            ('image_compressed', '/video_stream/h264')
+        ]
     )
 
     nitros_container = ComposableNodeContainer(
@@ -202,8 +200,6 @@ def generate_launch_description():
         executable='apriltag_tracker',
         name='apriltag_tracker',
     )
-
-    #
 
     explore_node = Node(
         package='frontier_exploration',
@@ -228,7 +224,7 @@ def generate_launch_description():
 
     scan_republisher_node = Node(
         package='parking',
-        executable='scan_republisher_cpp', # The C++ executable you built
+        executable='scan_republisher_cpp',
         output='screen'
     )
 
@@ -239,8 +235,8 @@ def generate_launch_description():
         output='screen',
         parameters=[{
             'laser_scan_topic': '/scan_nav',
-            'odom_topic': '/odom_rf2o',      # <--- RENAME: EKF listens to this
-            'publish_tf': False,             # <--- CRITICAL: Disable TF, EKF handles it now
+            'odom_topic': '/odom_rf2o',
+            'publish_tf': False,
             'base_frame_id': 'base_link',
             'odom_frame_id': 'odom',
             'init_pose_from_topic': '',
@@ -260,17 +256,13 @@ def generate_launch_description():
        remappings=[('odometry/filtered', '/odom')]
     )
 
-
-
-
     goal_masking_node = Node(
         package='parking',
         executable='goal_masking_node',
         name='goal_masking_node',
         output='screen',
         remappings=[
-            # Remap the default listener to the topic coming from BoxEstimator
-            ('/goal_pose', '/parking_goal') 
+            ('/goal_pose', '/parking_goal')
         ]
     )
 
@@ -287,72 +279,45 @@ def generate_launch_description():
             'kd_v': 0.0,
             'kp_w': 0.0,
             'ki_w': 0.0,
-            'kd_w': 0.0,  # The smoothing layer to prevent 20Hz vibration
+            'kd_w': 0.0,
         }]
     )
 
     video_streamer_node = Node(
-    package='parking',
-    executable='video_streamer',
-    name='video_streamer',
-    output='screen'
+        package='parking',
+        executable='video_streamer',
+        name='video_streamer',
+        output='screen'
     )
-
-    # video_stream_node = Node(
-    # package='web_video_server',
-    # executable='web_video_server',
-    # name='web_video_server',
-    # )
-
-
 
     foxglove_bridge_node = Node(
         package='foxglove_bridge',
         executable='foxglove_bridge',
         name='foxglove_bridge',
         parameters=[{
-            'port': 8765, 
+            'port': 8765,
         }]
     )
 
-   
-
     return LaunchDescription([
-        # 1. Start Transforms and Sensors immediately
-        lidar_tf,
-        lidar_ghost_tf,
+        # --- ACTIVE FOR VISION TEST ---
         camera_tf,
-        lidar_launch,
-        #camera_launch,
         nitros_container,
-        scan_republisher_node,
-        goal_masking_node,
-        velocity_controller_node,
-        video_streamer_node,
-        #video_stream_node,
-        #foxglove_bridge_node,
-        
+        TimerAction(period=3.0, actions=[tracker_node]),
+        TimerAction(period=5.0, actions=[box_estimator_node]),
+        TimerAction(period=8.0, actions=[OpaqueFunction(function=pin_processes)]),
 
-        
-        # 2. Wait 3s for Lidar to spin up, then start Odom
-        TimerAction(period=2.0, actions=[rf2o_node]),
-
-        TimerAction(period=5.0, actions=[tracker_node]),
-        
-        TimerAction(period=4.0, actions=[robot_localization_node]),
-
-        # 3. Wait 5s for Odom to stabilize, then start SLAM
-        TimerAction(period=6.0, actions=[slam_node]),
-
-        # # # 4. Wait 10s for Map to build, then start Nav2
-        TimerAction(period=8.0, actions=[nav2_launch]),
-        TimerAction(period=15.0, actions=[OpaqueFunction(function=pin_processes)]),
-
-        # # # 5. Finally, start your logic
-        TimerAction(period=25.0, actions=[
-             mission_control_node,
-             box_estimator_node,
-             #explore_node
-         ])
+        # --- INACTIVE (COMMENTED OUT) ---
+        # lidar_tf,
+        # lidar_ghost_tf,
+        # lidar_launch,
+        # scan_republisher_node,
+        # goal_masking_node,
+        # velocity_controller_node,
+        # video_streamer_node,
+        # TimerAction(period=2.0, actions=[rf2o_node]),
+        # TimerAction(period=4.0, actions=[robot_localization_node]),
+        # TimerAction(period=6.0, actions=[slam_node]),
+        # TimerAction(period=8.0, actions=[nav2_launch]),
+        # TimerAction(period=25.0, actions=[mission_control_node]),
     ])
-

@@ -123,6 +123,12 @@ install(PROGRAMS
   RENAME pose_dashboard
 )
 
+install(PROGRAMS
+  parking/cmd_vel_serial_bridge.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME cmd_vel_serial_bridge
+)
+
 # =========================================================
 # 5. Install Launch and Config files
 # =========================================================

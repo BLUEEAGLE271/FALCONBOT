@@ -316,26 +316,35 @@ def generate_launch_description():
     )
 
 
+    # --- PHASE 0: Serial bridge — mirrors motor_tester._send_velocity over /cmd_vel ---
+    cmd_vel_serial_bridge_node = Node(
+        package='parking',
+        executable='cmd_vel_serial_bridge',
+        name='cmd_vel_serial_bridge',
+        output='screen',
+    )
+
     return LaunchDescription([
-        # --- ACTIVE FOR VISION TEST ---
+        # --- ACTIVE: PHASE 0 — SLAM MAPPING ---
+        # lidar_launch,
+        # lidar_tf,
+        # lidar_ghost_tf,                                          # base_link→base_laser_nav needed by scan_republisher / rf2o
+        # scan_republisher_node,                                   # republishes /scan → /scan_nav for rf2o
+        # cmd_vel_serial_bridge_node,                              # /cmd_vel → {"T":13,"X":...,"Z":...} over /dev/esp32
+        # TimerAction(period=2.0, actions=[rf2o_node]),            # wait for lidar to publish first
+        # TimerAction(period=4.0, actions=[robot_localization_node]),  # wait for rf2o to produce /odom_rf2o
+        # TimerAction(period=6.0, actions=[slam_node]),            # wait for odom→base_link TF from EKF
+
+        # --- INACTIVE FOR PHASE 0 (VISION / AUTONOMY — restore for later phases) ---
         mock_odom_tf,
         camera_tf,
         nitros_container,
         TimerAction(period=3.0, actions=[tracker_node]),
         TimerAction(period=5.0, actions=[box_estimator_node]),
         TimerAction(period=8.0, actions=[OpaqueFunction(function=pin_processes)]),
-
-        # --- INACTIVE (COMMENTED OUT) ---
-        # lidar_tf,
-        # lidar_ghost_tf,
-        # lidar_launch,
-        # scan_republisher_node,
         # goal_masking_node,
         # velocity_controller_node,
         # video_streamer_node,
-        # TimerAction(period=2.0, actions=[rf2o_node]),
-        # TimerAction(period=4.0, actions=[robot_localization_node]),
-        # TimerAction(period=6.0, actions=[slam_node]),
         # TimerAction(period=8.0, actions=[nav2_launch]),
         # TimerAction(period=25.0, actions=[mission_control_node]),
     ])

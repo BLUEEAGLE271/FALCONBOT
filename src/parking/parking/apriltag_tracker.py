@@ -25,8 +25,7 @@ except ImportError:
 TARGET_IDS            = [0, 1, 2, 3]
 PRECISION_MARKER_ID   = 3
 PRECISION_TRIGGER_DIST = 0.7     # metres — raw camera distance to trigger precision
-APPROACH_DIST_ROUGH   = 0.5     # metres — debug goal offset for rough approach
-APPROACH_DIST_PREC    = 0.15    # metres — debug goal offset for precision
+
  
 # EMA filter alphas — lower = smoother but more lag
 ALPHA_DEFAULT = 0.3   # markers 0, 1, 2
@@ -95,15 +94,11 @@ class AprilTagTracker(Node):
             )
  
         # Debug goal pose — visualisation only, not sent to Nav2
-        self.debug_goal_pub = self.create_publisher(
-            PoseStamped, '/debug_goal_pose', 10)
  
         # Debug axes
         self.axes_pub = self.create_publisher(
             MarkerArray, '/apriltag/debug_axes', 10)
  
-        # Timer — publish debug goal at 5Hz even when no new detections
-        self.create_timer(0.2, self._publish_debug_goal)
  
         # Track best marker for debug goal
         self._best_marker_id   = None
@@ -192,7 +187,7 @@ class AprilTagTracker(Node):
                             f.tvec, f.quat,
                             msg.header, m_id
                         )
-                        self._publish_tf(f.tvec, f.quat, msg.header.stamp, m_id)
+                        self._publish_tf(f.tvec, f.quat, msg.header, m_id)
                         continue
  
                     # Valid — apply EMA filter
@@ -210,8 +205,8 @@ class AprilTagTracker(Node):
  
             # Publish filtered pose
             self._publish_marker(filtered_tvec, filtered_quat, msg.header, m_id)
-            self._publish_tf(filtered_tvec, filtered_quat, msg.header.stamp, m_id)
-            self._publish_axes(filtered_tvec, filtered_quat, m_id)
+            self._publish_tf(filtered_tvec, filtered_quat, msg.header, m_id)
+            self._publish_axes(filtered_tvec, filtered_quat,msg.header, m_id)
  
             # Track best marker for debug goal
             # Prefer marker 3 if within precision trigger distance
@@ -297,7 +292,7 @@ class AprilTagTracker(Node):
         try:
             tf_stamped = self.tf_buffer.lookup_transform(
                 'odom',
-                'camera_optical_frame',
+                'camera_optical',
                 rclpy.time.Time(),
                 rclpy.duration.Duration(seconds=0.1)
             )
@@ -363,10 +358,10 @@ class AprilTagTracker(Node):
         msg.pose.orientation.w = float(quat[3])
         self._marker_pubs[m_id].publish(msg)
  
-    def _publish_tf(self, tvec, quat, stamp, m_id):
+    def _publish_tf(self, tvec, quat, header, m_id):
         t                          = TransformStamped()
-        t.header.stamp             = stamp
-        t.header.frame_id          = 'camera_optical_frame'
+        t.header.stamp             = header.stamp
+        t.header.frame_id          = header.frame_id
         t.child_frame_id           = f'apriltag_{m_id}'
         t.transform.translation.x  = float(tvec[0])
         t.transform.translation.y  = float(tvec[1])
@@ -377,7 +372,7 @@ class AprilTagTracker(Node):
         t.transform.rotation.w     = float(quat[3])
         self.tf_broadcaster.sendTransform(t)
  
-    def _publish_axes(self, tvec, quat, m_id):
+    def _publish_axes(self, tvec, quat,header, m_id):
         """Publish debug axes arrows in camera frame for RViz."""
         ma = MarkerArray()
  
@@ -385,7 +380,7 @@ class AprilTagTracker(Node):
                 (1.0, 0.0, 0.0), 0.0),   # red = forward
                 ((0.0, 1.0, 0.0), math.pi/2)]):  # green = left
             m                    = Marker()
-            m.header.frame_id    = 'camera_optical_frame'
+            m.header.frame_id    = header.frame_id
             m.header.stamp       = self.get_clock().now().to_msg()
             m.ns                 = f'apriltag_{m_id}'
             m.id                 = m_id * 10 + i

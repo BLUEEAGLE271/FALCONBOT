@@ -42,6 +42,14 @@ def Ry(deg):
     M[2, 0], M[2, 2] = -s,  c
     return M
 
+def Rz(deg):
+    r = math.radians(deg)
+    c, s = math.cos(r), math.sin(r)
+    M = np.eye(4)
+    M[0, 0], M[0, 1] =  c, -s
+    M[1, 0], M[1, 1] =  s,  c
+    return M
+
 
 class BoxEstimator(Node):
     def __init__(self):
@@ -268,6 +276,8 @@ class BoxEstimator(Node):
         goal_x, goal_y, goal_yaw = self.compute_averaged_goal(
             self.rough_buffer, self.APPROACH_DIST_ROUGH
         )
+        if m_id in (0, 1):
+            goal_yaw += math.pi
         self.get_logger().info("ROUGH APPROACH GOAL READY.")
 
         if self._send_nav_goal(goal_x, goal_y, goal_yaw, curr_x, curr_y):

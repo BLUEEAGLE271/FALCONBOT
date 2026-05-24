@@ -1,6 +1,6 @@
 image_width: 3280
 image_height: 2464
-camera_name: "camera_optical_frame"
+camera_name: "camera_optical"
 camera_matrix:
   rows: 3
   cols: 3

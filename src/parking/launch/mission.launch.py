@@ -14,6 +14,8 @@ import subprocess, psutil
 ##source install/setup.bash
 ##ros2 launch parking mission.launch.py
 ##ros2 launch parking mission.launch.py 2>&1 | grep --line-buffered -v "Frame drop"
+##ros2 launch parking mission.launch.py 2>&1 | grep --line-buffered -v -e "Frame drop" -e "some other warning"
+
 ##ros2 topic pub --once /start_mission std_msgs/msg/Bool "{data: true}"
 
 def pin_processes(context, *args, **kwargs):
@@ -76,7 +78,10 @@ def generate_launch_description():
         }],
         remappings=[
             ('left/image_raw', '/image_raw'),
-            ('left/camera_info', '/camera_info')
+            ('left/camera_info', '/camera_info'),
+            # THE KILL SWITCH: Prevent the driver from messing with our TF tree
+            ('/tf', '/tf_garbage'),
+            ('/tf_static', '/tf_static_garbage')
         ]
     )
 
@@ -124,13 +129,13 @@ def generate_launch_description():
         package='tf2_ros',
         executable='static_transform_publisher',
         name='camera_tf_publisher',
-        # Apply standard optical rotation: Yaw -90 deg, Roll -90 deg
+        # DIRECT CONNECTION: We bypass the physical 'camera' frame entirely.
+        # Standard Optical Rotation: Z-axis Forward, X-axis Right, Y-axis Down.
         arguments=['--x', '0.126', '--y', '0', '--z', '0',
                    '--yaw', '-1.5708', '--pitch', '0', '--roll', '-1.5708',
                    '--frame-id', 'base_link',
-                   '--child-frame-id', 'camera_optical'] # Make sure this matches the tag header!
+                   '--child-frame-id', 'camera_optical'] # <--- Target camera_optical directly
     )
-
     # --- SLAM ---
     slam_node = Node(
         package='slam_toolbox',

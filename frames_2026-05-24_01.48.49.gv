@@ -1,0 +1,10 @@
+digraph G {
+"camera_optical" -> "tag36h11:0"[label=" Broadcaster: default_authority\nAverage rate: 19.166\nBuffer length: 4.905\nMost recent transform: 1779583728.773887\nOldest transform: 1779583723.869367\n"];
+"camera" -> "camera_optical"[label=" Broadcaster: default_authority\nAverage rate: 10000.0\nBuffer length: 0.0\nMost recent transform: 0.0\nOldest transform: 0.0\n"];
+"odom" -> "base_link"[label=" Broadcaster: default_authority\nAverage rate: 10000.0\nBuffer length: 0.0\nMost recent transform: 0.0\nOldest transform: 0.0\n"];
+"camera_optical_frame" -> "apriltag_0"[label=" Broadcaster: default_authority\nAverage rate: 13.661\nBuffer length: 4.905\nMost recent transform: 1779583728.773887\nOldest transform: 1779583723.869367\n"];
+edge [style=invis];
+ subgraph cluster_legend { style=bold; color=black; label ="view_frames Result";
+"Recorded at time: 1779583729.0433075"[ shape=plaintext ] ;
+}->"camera_optical_frame";
+}

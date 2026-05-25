@@ -41,8 +41,8 @@ def pin_processes(context, *args, **kwargs):
                   or 'apriltag_tracker' in cmd):
                 subprocess.run(['taskset', '-cp', '4,5', pid])
 
-            # Priority 4 — Background: global planner and SLAM are latency-tolerant
-            elif 'planner_server' in cmd or 'slam_toolbox' in cmd:
+            # Priority 4 — Background: global planner and AMCL are latency-tolerant
+            elif 'planner_server' in cmd or 'amcl' in cmd or 'map_server' in cmd:
                 subprocess.run(['taskset', '-cp', '0,1', pid])
 
         except (psutil.NoSuchProcess, psutil.AccessDenied):
@@ -136,7 +136,7 @@ def generate_launch_description():
                    '--frame-id', 'base_link',
                    '--child-frame-id', 'camera_optical'] # <--- Target camera_optical directly
     )
-    # --- SLAM ---
+    # --- SLAM (Phase 0 only — kept for reference, not launched in AMCL mode) ---
     slam_node = Node(
         package='slam_toolbox',
         executable='async_slam_toolbox_node',
@@ -147,7 +147,19 @@ def generate_launch_description():
         prefix=['nice -n 10']
     )
 
-    # --- NAV2 ---
+    # --- AMCL localization against pre-built map ---
+    # localization_launch.py starts: map_server + amcl + lifecycle_manager_localization
+    localization_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(os.path.join(nav2_pkg, 'launch', 'localization_launch.py')),
+        launch_arguments={
+            'use_sim_time': 'false',
+            'autostart': 'True',
+            'map': '/home/blueeagle/ros2_ws/maps/my_lab_map_filtered.yaml',
+            'params_file': os.path.join(my_pkg, 'config', 'my_nav2_params.yaml')
+        }.items()
+    )
+
+    # --- NAV2 navigation stack (controller, planner, BT, etc.) ---
     nav2_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(os.path.join(nav2_pkg, 'launch', 'navigation_launch.py')),
         launch_arguments={
@@ -222,6 +234,13 @@ def generate_launch_description():
     box_estimator_node = Node(
         package='parking',
         executable='box_estimator',
+        output='screen'
+    )
+
+    docking_supervisor_node = Node(
+        package='parking',
+        executable='docking_supervisor',
+        name='docking_supervisor',
         output='screen'
     )
 
@@ -316,7 +335,16 @@ def generate_launch_description():
     )
 
 
-    # --- PHASE 0: Serial bridge — mirrors motor_tester._send_velocity over /cmd_vel ---
+    # --- PHASE 0: Unified ESP32 bridge — /cmd_vel TX + wheel odometry RX ---
+    # Supersedes cmd_vel_serial_bridge (both cannot open /dev/esp32 simultaneously)
+    esp32_odom_publisher_node = Node(
+        package='parking',
+        executable='esp32_odom_publisher',
+        name='esp32_odom_publisher',
+        output='screen',
+    )
+
+    # Kept for reference but do not activate alongside esp32_odom_publisher
     cmd_vel_serial_bridge_node = Node(
         package='parking',
         executable='cmd_vel_serial_bridge',
@@ -325,26 +353,29 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
-        # --- ACTIVE: PHASE 0 — SLAM MAPPING ---
-        # lidar_launch,
-        # lidar_tf,
-        # lidar_ghost_tf,                                          # base_link→base_laser_nav needed by scan_republisher / rf2o
-        # scan_republisher_node,                                   # republishes /scan → /scan_nav for rf2o
-        # cmd_vel_serial_bridge_node,                              # /cmd_vel → {"T":13,"X":...,"Z":...} over /dev/esp32
-        # TimerAction(period=2.0, actions=[rf2o_node]),            # wait for lidar to publish first
-        # TimerAction(period=4.0, actions=[robot_localization_node]),  # wait for rf2o to produce /odom_rf2o
-        # TimerAction(period=6.0, actions=[slam_node]),            # wait for odom→base_link TF from EKF
-
-        # --- INACTIVE FOR PHASE 0 (VISION / AUTONOMY — restore for later phases) ---
-        mock_odom_tf,
+        # --- ACTIVE: PHASE 1 — AMCL LOCALIZATION + FULL NAV2 ---
         camera_tf,
         nitros_container,
-        TimerAction(period=3.0, actions=[tracker_node]),
-        TimerAction(period=5.0, actions=[box_estimator_node]),
-        TimerAction(period=8.0, actions=[OpaqueFunction(function=pin_processes)]),
+        lidar_launch,
+        lidar_tf,
+        lidar_ghost_tf,                                              # base_link→base_laser_nav for rf2o
+        scan_republisher_node,                                       # /scan → /scan_nav for rf2o
+        esp32_odom_publisher_node,                                   # /cmd_vel → ESP32 + encoder → /wheel/odometry
+        TimerAction(period=2.0,  actions=[rf2o_node]),               # wait for lidar to publish
+        TimerAction(period=4.0,  actions=[robot_localization_node]), # wait for rf2o → /odom_rf2o
+        TimerAction(period=6.0,  actions=[localization_launch]),     # map_server + AMCL (needs odom→base_link TF)
+        TimerAction(period=10.0, actions=[nav2_launch]),             # Nav2 stack (needs map→odom TF from AMCL)
+
+        # --- INACTIVE: PHASE 0 SLAM (re-enable to remap) ---
+        # TimerAction(period=6.0, actions=[slam_node]),
+
+        # --- VISION / AUTONOMY ---
+        TimerAction(period=3.0,  actions=[tracker_node]),
+        TimerAction(period=5.0,  actions=[box_estimator_node]),
+        TimerAction(period=14.0, actions=[docking_supervisor_node]), # after Nav2 is ready
+        TimerAction(period=16.0, actions=[OpaqueFunction(function=pin_processes)]),
         # goal_masking_node,
         # velocity_controller_node,
-        # video_streamer_node,
-        # TimerAction(period=8.0, actions=[nav2_launch]),
+        #video_streamer_node,
         # TimerAction(period=25.0, actions=[mission_control_node]),
     ])

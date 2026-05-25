@@ -129,6 +129,41 @@ install(PROGRAMS
   RENAME cmd_vel_serial_bridge
 )
 
+install(PROGRAMS
+  parking/esp32_odom_publisher.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME esp32_odom_publisher
+)
+
+install(PROGRAMS
+  parking/nav_metrics_harness.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME nav_metrics_harness
+)
+
+install(PROGRAMS
+  parking/mppi_obstacle_tester.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME mppi_obstacle_tester
+)
+
+install(PROGRAMS
+  parking/cmd_vel_plotter.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME cmd_vel_plotter
+)
+
+install(PROGRAMS
+  parking/docking_supervisor.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME docking_supervisor
+)
+
+install(PROGRAMS
+  parking/reset_mission.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME reset_mission
+)
 # =========================================================
 # 5. Install Launch and Config files
 # =========================================================

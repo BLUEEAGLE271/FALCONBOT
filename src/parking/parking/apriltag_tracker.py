@@ -24,7 +24,7 @@ except ImportError:
 # ── Configuration ─────────────────────────────────────────────────────
 TARGET_IDS            = [0, 1, 2, 3]
 PRECISION_MARKER_ID   = 3
-PRECISION_TRIGGER_DIST = 0.7     # metres — raw camera distance to trigger precision
+PRECISION_TRIGGER_DIST = 0.5     # metres — raw camera distance to trigger precision
 
  
 # EMA filter alphas — lower = smoother but more lag

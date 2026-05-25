@@ -36,7 +36,7 @@ ekf_filter_node:
                   false, false, false,
                   false, false, false,
                   false, false, true,
-                  true,  false, false]
+                  false, false, false]
 
     # CRITICAL: Since your IMU likely includes gravity in the raw data,
     # this setting attempts to remove the ~9.81m/s^2 from the reading.
@@ -67,5 +67,26 @@ ekf_filter_node:
                                0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.01, 0.0,
                                0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.015]
 
-    transform_timeout: 0.0
-    predict_to_current_time: false
+    # --- INPUT 3: Wheel Encoder Odometry ---
+    odom1: /wheel/odometry
+
+    # Fuse vx only — wheel slip during rotation makes vyaw unreliable.
+    # IMU gyro owns heading (vyaw=false). Absolute pose ignored to avoid
+    # fighting the RF2O accumulated position estimate.
+    #   [x,     y,     z,     roll,  pitch, yaw,
+    #    vx,    vy,    vz,    vroll, vpitch,vyaw,
+    #    ax,    ay,    az]
+    odom1_config: [false, false, false,
+                   false, false, false,
+                   true,  false, false,
+                   false, false, false,
+                   false, false, false]
+
+    odom1_differential: false
+    odom1_pose_rejection_threshold: 5.0
+    odom1_twist_rejection_threshold: 5.0
+    odom1_queue_size: 5
+    odom1_nodelay: true
+
+    transform_timeout: 0.1
+    predict_to_current_time: true

@@ -1,0 +1,7 @@
+image: my_lab_map.pgm
+mode: trinary
+resolution: 0.1
+origin: [-2.51, -4.56, 0]
+negate: 0
+occupied_thresh: 0.65
+free_thresh: 0.25

@@ -66,7 +66,8 @@ _BANNER = r"""
 """
 
 _TELEOP_CMD = [
-    "ros2", "run", "teleop_twist_keyboard", "teleop_twist_keyboard"
+    "ros2", "run", "teleop_twist_keyboard", "teleop_twist_keyboard",
+    "--ros-args", "-p", "turn:=5.0", "-p", "speed:=0.3"
 ]
 
 

@@ -1,0 +1,20 @@
+timestamp_iso,event_type,description,value
+2026-05-25T18:35:01.831474,NODE_START,DockingSupervisor initialised,
+2026-05-25T18:35:50.270012,GOAL_POSE,RViz zone goal received,"(1.49,0.48)"
+2026-05-25T18:35:50.280614,GOAL_ACCEPTED,Nav2 goal accepted and tracking started,
+2026-05-25T18:35:57.824594,STATE_CHANGE,Transitioned to VISUAL_HOMING,marker=1 dist=1.916
+2026-05-25T18:35:57.841127,GOAL_ACCEPTED,Nav2 goal accepted and tracking started,
+2026-05-25T18:36:17.848030,STATE_CHANGE,Transitioned to NAV_TO_STAGING,via VISUAL_HOMING fresh re-read of marker 0
+2026-05-25T18:36:17.858262,GOAL_ACCEPTED,Nav2 goal accepted and tracking started,
+2026-05-25T18:36:50.942560,RESET,Mission reset triggered by service call,
+2026-05-25T18:36:50.956526,STATE_CHANGE,Transitioned to IDLE,via reset
+2026-05-25T18:36:50.996257,STATE_CHANGE,Transitioned to IDLE,staging_failed status=5
+2026-05-25T18:36:57.790958,GOAL_POSE,RViz zone goal received,"(2.56,2.62)"
+2026-05-25T18:36:57.801317,GOAL_ACCEPTED,Nav2 goal accepted and tracking started,
+2026-05-25T18:37:00.559294,STATE_CHANGE,Transitioned to VISUAL_HOMING,marker=0 dist=1.013
+2026-05-25T18:37:00.567124,GOAL_ACCEPTED,Nav2 goal accepted and tracking started,
+2026-05-25T18:37:00.583288,STATE_CHANGE,Transitioned to COMMUTING,visual_homing_failed status=6
+2026-05-25T18:37:00.644344,STATE_CHANGE,Transitioned to VISUAL_HOMING,marker=0 dist=1.040
+2026-05-25T18:37:00.652561,GOAL_ACCEPTED,Nav2 goal accepted and tracking started,
+2026-05-25T18:37:09.319778,RESET,Mission reset triggered by service call,
+2026-05-25T18:37:09.356287,STATE_CHANGE,Transitioned to IDLE,via reset

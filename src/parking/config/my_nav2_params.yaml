@@ -11,7 +11,7 @@ bt_navigator:
     global_frame: map
     robot_base_frame: base_link
     odom_topic: /odom
-    bt_loop_duration: 10
+    bt_loop_duration: 100
     default_server_timeout: 20
     enable_groot_monitoring: True
     groot_zmq_publisher_port: 1666
@@ -95,7 +95,7 @@ controller_server:
     general_goal_checker:
       stateful: True
       plugin: "nav2_controller::SimpleGoalChecker"
-      xy_goal_tolerance: 0.15
+      xy_goal_tolerance: 0.1
       yaw_goal_tolerance: 0.3
 
     FollowPath:
@@ -134,42 +134,43 @@ controller_server:
       ObstaclesCritic:
         enabled: true
         cost_power: 1
-        repulsion_weight: 5.0     # gradient felt across full 0.25 m inflation — early steering
-        critical_weight: 25.0      # dominant hard penalty; overrides path-following near obstacles
-        near_goal_distance: 0.0
-        consider_footprint: true
+        repulsion_weight: 2.5     # reduced — gentler gradient in tight dock approach area
+        critical_weight: 10.0     # was 25 — dominated all other critics; robot froze near dock wall
+        near_goal_distance: 0.3   # relax obstacle penalty inside 0.3 m of goal (final approach)
+        consider_footprint: false  # was true — footprint check too aggressive in dock area; center-point sufficient
 
       PathFollowCritic:
         enabled: true
         cost_power: 2
-        cost_weight: 15.0
-        offset_from_furthest: 3    # carrot 6 steps (0.6 s) ahead — stable heading reference
-        threshold_to_consider: 1.5
+        cost_weight: 10.0
+        offset_from_furthest: 3    # carrot 3 steps (0.3 s) ahead — stable heading reference
+        threshold_to_consider: 0.3 # was 1.5 — disabled within 1.5 m; with short dock approach goals
+                                   # PathFollowCritic was NEVER active → dead zone; now stays on until 0.3 m
 
       PathAlignCritic:
         enabled: true
         cost_power: 1
-        cost_weight: 5.0          # aggressively snaps heading to path tangent in free space
+        cost_weight: 3.0          # was 5.0 — reduced to avoid fighting forward motion
         max_path_occupancy_ratio: 0.5
-        threshold_to_consider: 1.5
+        threshold_to_consider: 0.3 # was 1.5 — same dead-zone fix as PathFollowCritic
         use_path_orientation: true
 
       GoalCritic:
         enabled: true
         cost_power: 1
         cost_weight: 10.0
-        threshold_to_consider: 0.7
+        threshold_to_consider: 0.3 # was 0.2 — activate goal homing slightly earlier
 
       GoalAngleCritic:
         enabled: true
         cost_power: 1
-        cost_weight: 10.0
-        threshold_to_consider: 0.7
+        cost_weight: 8.0          # was 20.0 — was fighting PreferForwardCritic; robot couldn't move
+        threshold_to_consider: 0.3
 
       PreferForwardCritic:
         enabled: true
         cost_power: 1
-        cost_weight: 5.0
+        cost_weight: 8.0          # was 5.0 — raised to overcome reduced obstacle weight
         threshold_to_consider: 0.5
 
 
@@ -204,7 +205,7 @@ local_costmap:
           inf_is_valid: true
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        inflation_radius: 0.45    # was 0.04 — must exceed robot half-footprint (0.097 m) plus margin
+        inflation_radius: 0.25    # was 0.04 — must exceed robot half-footprint (0.097 m) plus margin
         cost_scaling_factor: 10.0  # low value = gentle exponential decay; MPPI ObstaclesCritic
                                   # "feels" the gradient across the full 0.25 m and steers early
 

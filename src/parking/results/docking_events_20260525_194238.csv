@@ -1,0 +1,25 @@
+timestamp_iso,event_type,description,value
+2026-05-25T19:42:39.023863,NODE_START,DockingSupervisor initialised,
+2026-05-25T19:42:57.760755,GOAL_POSE,RViz zone goal received,"(1.71,1.64)"
+2026-05-25T19:42:57.765672,GOAL_ACCEPTED,Nav2 goal accepted and tracking started,
+2026-05-25T19:42:57.974029,STATE_CHANGE,Transitioned to VISUAL_HOMING,"marker2_dist=1.265 odom=(0.42,-0.47)"
+2026-05-25T19:42:57.980321,GOAL_SENT,Visual homing nav goal sent,"standoff=(0.205,-0.259) approach_deg=-44.3"
+2026-05-25T19:42:57.997029,GOAL_ACCEPTED,Nav2 goal accepted and tracking started,
+2026-05-25T19:43:01.860132,STATE_CHANGE,Transitioned to BUFFERING_ROUGH,marker2_dist=0.593 (homing exit)
+2026-05-25T19:43:02.541790,STATE_CHANGE,Transitioned to NAV_TO_STAGING,"goal=(0.868,-0.870) yaw=140.4deg"
+2026-05-25T19:43:02.554313,GOAL_ACCEPTED,Nav2 goal accepted and tracking started,
+2026-05-25T19:43:14.462090,STATE_CHANGE,Transitioned to IDLE,staging_failed status=6
+2026-05-25T19:45:34.202720,GOAL_POSE,RViz zone goal received,"(2.63,1.96)"
+2026-05-25T19:45:34.212392,GOAL_ACCEPTED,Nav2 goal accepted and tracking started,
+2026-05-25T19:45:47.501263,GOAL_POSE,RViz zone goal received,"(2.19,2.32)"
+2026-05-25T19:45:47.520990,GOAL_ACCEPTED,Nav2 goal accepted and tracking started,
+2026-05-25T19:46:00.423939,RESET,Mission reset triggered by service call,
+2026-05-25T19:46:00.438905,STATE_CHANGE,Transitioned to IDLE,via reset
+2026-05-25T19:46:03.497279,GOAL_POSE,RViz zone goal received,"(2.04,2.33)"
+2026-05-25T19:46:03.505459,GOAL_ACCEPTED,Nav2 goal accepted and tracking started,
+2026-05-25T19:46:30.238813,STATE_CHANGE,Transitioned to VISUAL_HOMING,"marker2_dist=1.209 odom=(-0.00,-0.29)"
+2026-05-25T19:46:30.253179,GOAL_SENT,Visual homing nav goal sent,"standoff=(-0.199,-0.065) approach_deg=-49.3"
+2026-05-25T19:46:30.262929,GOAL_ACCEPTED,Nav2 goal accepted and tracking started,
+2026-05-25T19:46:34.895959,STATE_CHANGE,Transitioned to BUFFERING_ROUGH,visual homing nav goal succeeded
+2026-05-25T19:46:35.531878,STATE_CHANGE,Transitioned to NAV_TO_STAGING,"goal=(0.592,-1.076) yaw=123.9deg"
+2026-05-25T19:46:35.539226,GOAL_ACCEPTED,Nav2 goal accepted and tracking started,

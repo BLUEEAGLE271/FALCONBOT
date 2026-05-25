@@ -1,0 +1,13 @@
+timestamp_iso,event_type,description,value
+2026-05-25T18:30:45.642719,NODE_START,DockingSupervisor initialised,
+2026-05-25T18:31:39.032043,GOAL_POSE,RViz zone goal received,"(1.58,1.46)"
+2026-05-25T18:31:39.054729,GOAL_ACCEPTED,Nav2 goal accepted and tracking started,
+2026-05-25T18:31:44.863973,STATE_CHANGE,Transitioned to VISUAL_HOMING,marker=2 dist=1.124
+2026-05-25T18:31:44.877579,GOAL_ACCEPTED,Nav2 goal accepted and tracking started,
+2026-05-25T18:31:44.896762,STATE_CHANGE,Transitioned to COMMUTING,visual_homing_failed status=6
+2026-05-25T18:31:45.646099,STATE_CHANGE,Transitioned to VISUAL_HOMING,marker=2 dist=1.175
+2026-05-25T18:31:45.657799,GOAL_ACCEPTED,Nav2 goal accepted and tracking started,
+2026-05-25T18:32:04.888946,STATE_CHANGE,Transitioned to BUFFERING_PRECISION,marker3_dist=0.775
+2026-05-25T18:32:05.757678,STATE_CHANGE,Transitioned to NAV_TO_DOCK,"goal=(1.087,2.242) yaw=-155.6deg"
+2026-05-25T18:32:07.847064,GOAL_ACCEPTED,Nav2 goal accepted and tracking started,
+2026-05-25T18:32:14.482684,MISSION_SUCCESS,Final Combined Error,0.134987

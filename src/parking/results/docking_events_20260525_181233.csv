@@ -1,0 +1,30 @@
+timestamp_iso,event_type,description,value
+2026-05-25T18:12:33.969391,NODE_START,DockingSupervisor initialised,
+2026-05-25T18:13:23.425492,GOAL_POSE,RViz zone goal received,"(2.10,1.12)"
+2026-05-25T18:13:23.432308,GOAL_ACCEPTED,Nav2 goal accepted and tracking started,
+2026-05-25T18:13:26.613379,STATE_CHANGE,Transitioned to VISUAL_HOMING,marker=1 dist=1.442
+2026-05-25T18:13:26.620080,GOAL_ACCEPTED,Nav2 goal accepted and tracking started,
+2026-05-25T18:13:26.629474,STATE_CHANGE,Transitioned to COMMUTING,visual_homing_failed status=6
+2026-05-25T18:13:27.757948,STATE_CHANGE,Transitioned to BUFFERING_ROUGH,
+2026-05-25T18:13:35.694198,STATE_CHANGE,Transitioned to NAV_TO_STAGING,"goal=(2.631,1.937) yaw=177.9deg"
+2026-05-25T18:13:35.704137,GOAL_ACCEPTED,Nav2 goal accepted and tracking started,
+2026-05-25T18:13:52.129168,STATE_CHANGE,Transitioned to BUFFERING_PRECISION,marker3_dist=0.679
+2026-05-25T18:13:52.666482,STATE_CHANGE,Transitioned to NAV_TO_DOCK,"goal=(2.197,1.987) yaw=-175.6deg"
+2026-05-25T18:13:54.756061,GOAL_ACCEPTED,Nav2 goal accepted and tracking started,
+2026-05-25T18:14:14.021353,MISSION_SUCCESS,Final Combined Error,0.469993
+2026-05-25T18:14:22.912883,RESET,Mission reset triggered by service call,
+2026-05-25T18:14:22.921292,STATE_CHANGE,Transitioned to IDLE,via reset
+2026-05-25T18:14:57.958368,GOAL_POSE,RViz zone goal received,"(1.82,1.72)"
+2026-05-25T18:14:57.974146,GOAL_ACCEPTED,Nav2 goal accepted and tracking started,
+2026-05-25T18:14:59.717962,STATE_CHANGE,Transitioned to VISUAL_HOMING,marker=2 dist=1.823
+2026-05-25T18:14:59.731145,GOAL_ACCEPTED,Nav2 goal accepted and tracking started,
+2026-05-25T18:14:59.749400,STATE_CHANGE,Transitioned to COMMUTING,visual_homing_failed status=6
+2026-05-25T18:15:00.038799,STATE_CHANGE,Transitioned to VISUAL_HOMING,marker=2 dist=1.875
+2026-05-25T18:15:00.059072,GOAL_ACCEPTED,Nav2 goal accepted and tracking started,
+2026-05-25T18:15:13.226478,STATE_CHANGE,Transitioned to BUFFERING_ROUGH,visual homing standoff reached
+2026-05-25T18:15:14.162628,STATE_CHANGE,Transitioned to NAV_TO_STAGING,"goal=(2.013,2.506) yaw=-127.2deg"
+2026-05-25T18:15:14.169421,GOAL_ACCEPTED,Nav2 goal accepted and tracking started,
+2026-05-25T18:15:14.194196,STATE_CHANGE,Transitioned to BUFFERING_PRECISION,marker3_dist=0.819
+2026-05-25T18:15:14.715171,STATE_CHANGE,Transitioned to NAV_TO_DOCK,"goal=(1.714,2.123) yaw=-126.5deg"
+2026-05-25T18:15:16.801215,GOAL_ACCEPTED,Nav2 goal accepted and tracking started,
+2026-05-25T18:15:31.200302,STATE_CHANGE,Transitioned to IDLE,dock_failed status=6

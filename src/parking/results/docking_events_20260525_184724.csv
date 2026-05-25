@@ -1,0 +1,35 @@
+timestamp_iso,event_type,description,value
+2026-05-25T18:47:24.250451,NODE_START,DockingSupervisor initialised,
+2026-05-25T18:48:04.980256,GOAL_POSE,RViz zone goal received,"(2.32,2.01)"
+2026-05-25T18:48:04.993330,GOAL_ACCEPTED,Nav2 goal accepted and tracking started,
+2026-05-25T18:48:09.765063,STATE_CHANGE,Transitioned to BUFFERING_ROUGH,
+2026-05-25T18:48:10.708849,STATE_CHANGE,Transitioned to NAV_TO_STAGING,"goal=(0.666,0.738) yaw=-79.4deg"
+2026-05-25T18:48:10.717793,GOAL_ACCEPTED,Nav2 goal accepted and tracking started,
+2026-05-25T18:48:35.191980,STATE_CHANGE,Transitioned to IDLE,staging_failed status=6
+2026-05-25T18:48:58.887152,RESET,Mission reset triggered by service call,
+2026-05-25T18:48:58.896685,STATE_CHANGE,Transitioned to IDLE,via reset
+2026-05-25T18:49:20.390496,GOAL_POSE,RViz zone goal received,"(2.15,2.46)"
+2026-05-25T18:49:20.403217,GOAL_ACCEPTED,Nav2 goal accepted and tracking started,
+2026-05-25T18:49:25.977292,STATE_CHANGE,Transitioned to BUFFERING_ROUGH,
+2026-05-25T18:49:27.282847,STATE_CHANGE,Transitioned to NAV_TO_STAGING,"goal=(0.718,0.962) yaw=-64.2deg"
+2026-05-25T18:49:27.293005,GOAL_ACCEPTED,Nav2 goal accepted and tracking started,
+2026-05-25T18:49:40.466510,STATE_CHANGE,Transitioned to BUFFERING_PRECISION,"auto-triggered on staging arrival, marker3_dist=0.515"
+2026-05-25T18:49:41.136209,STATE_CHANGE,Transitioned to NAV_TO_DOCK,"goal=(0.931,0.459) yaw=-71.7deg"
+2026-05-25T18:49:43.206547,GOAL_ACCEPTED,Nav2 goal accepted and tracking started,
+2026-05-25T18:50:02.132865,SAFETY_ABORT,"Goal overshoot detected inside danger zone. Min dist: 0.089, Current: 0.109",
+2026-05-25T18:50:45.818045,RESET,Mission reset triggered by service call,
+2026-05-25T18:50:45.834546,STATE_CHANGE,Transitioned to IDLE,via reset
+2026-05-25T18:50:49.274654,GOAL_POSE,RViz zone goal received,"(2.49,2.56)"
+2026-05-25T18:50:49.286713,GOAL_ACCEPTED,Nav2 goal accepted and tracking started,
+2026-05-25T18:50:49.427977,STATE_CHANGE,Transitioned to BUFFERING_ROUGH,
+2026-05-25T18:50:51.566402,STATE_CHANGE,Transitioned to NAV_TO_STAGING,"goal=(0.955,1.006) yaw=-68.2deg"
+2026-05-25T18:50:51.576866,GOAL_ACCEPTED,Nav2 goal accepted and tracking started,
+2026-05-25T18:50:51.808295,STATE_CHANGE,Transitioned to IDLE,staging_failed status=6
+2026-05-25T18:51:09.813129,RESET,Mission reset triggered by service call,
+2026-05-25T18:51:09.820446,STATE_CHANGE,Transitioned to IDLE,via reset
+2026-05-25T18:51:18.150362,GOAL_POSE,RViz zone goal received,"(2.56,2.71)"
+2026-05-25T18:51:18.150985,STATE_CHANGE,Transitioned to BUFFERING_ROUGH,
+2026-05-25T18:51:18.166377,GOAL_ACCEPTED,Nav2 goal accepted and tracking started,
+2026-05-25T18:51:18.834342,STATE_CHANGE,Transitioned to NAV_TO_STAGING,"goal=(1.016,0.957) yaw=-81.5deg"
+2026-05-25T18:51:18.842769,GOAL_ACCEPTED,Nav2 goal accepted and tracking started,
+2026-05-25T18:51:40.610231,STATE_CHANGE,Transitioned to IDLE,staging_failed status=6

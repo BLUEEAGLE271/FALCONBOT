@@ -1,28 +1,27 @@
 #!/usr/bin/env python3
 """
-docking_supervisor.py — AprilTag Docking State Machine
-=======================================================
-Subscribes to /box_center_pose (from box_estimator) and drives the robot
-through a two-phase dock sequence:
+docking_supervisor.py — AprilTag Docking State Machine (RPP + Visual Servo)
+============================================================================
+Architecture
+------------
+Phase 1  COMMUTING      Regulated Pure Pursuit via Nav2 NavigateToPose
+Phase 2  VISUAL_HOMING  RPP drives toward detected AprilTag (any marker)
+Phase 3  BUFFERING_ROUGH / NAV_TO_STAGING  box_center_pose averaging → RPP staging
+Phase 4  VISUAL_SERVO_DOCK  Direct P-controller on /cmd_vel from raw marker pose
 
-  IDLE                → waiting for operator to send RViz zone goal
-  COMMUTING           → Nav2 driving to RViz zone goal (tag detections ignored)
-  LOCAL_SEARCH        → Archimedean spiral sweep (NavigateThroughPoses)
-  BUFFERING_ROUGH     → collecting BUF_ROUGH samples to compute staging goal
-  NAV_TO_STAGING      → Nav2 driving to 0.5 m standoff pose
-  BUFFERING_PRECISION → marker-3 seen close (<0.6 m); collecting precision samples
-  NAV_TO_DOCK         → Nav2 driving to exact box centre with shrunken footprint
-  LOCKED              → docked, final combined error logged
-  ABORTED             → overshoot kill-switch or spiral failure; awaiting reset
+State Machine
+-------------
+IDLE              waiting for RViz 2D Nav Goal
+COMMUTING         RPP to zone; marker seen → VISUAL_HOMING
+VISUAL_HOMING     RPP approaching tag; close (≤0.6 m) → BUFFERING_ROUGH
+LOCAL_SEARCH      Archimedean spiral if no tag at zone
+BUFFERING_ROUGH   10 box_center_pose samples → staging goal
+NAV_TO_STAGING    RPP to staging; marker-3 close → VISUAL_SERVO_DOCK
+VISUAL_SERVO_DOCK P-controller: vx=0.05, wz=clamp(1.5·marker_x, ±0.2)
+DOCKED            terminal success
+ABORTED           terminal failure (marker lost, spiral exhausted)
 
-Thesis extras (non-breaking):
-  • CSV logger  → ~/ros2_ws/src/parking/results/thesis_docking_metrics.csv
-  • Overshoot kill-switch (NAV_TO_DOCK only): armed at 10 cm, aborts on 2 cm retreat
-  • Final combined error logged to CSV on successful dock
-  • RViz /goal_pose proxy: robot drives to clicked zone, then spirals only if no tag seen on arrival
-
-Reset via: ros2 run parking reset_mission
-       or: ros2 service call /docking_supervisor/reset_mission std_srvs/srv/Trigger
+Reset: ros2 service call /docking_supervisor/reset_mission std_srvs/srv/Trigger
 """
 
 import csv
@@ -33,8 +32,8 @@ import time
 from datetime import datetime
 from enum import Enum, auto
 
-import psutil
 import rclpy
+import rclpy.time
 import tf_transformations as tft
 from rclpy.action import ActionClient
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallbackGroup
@@ -45,24 +44,21 @@ from rclpy.qos import QoSHistoryPolicy, QoSProfile, QoSReliabilityPolicy
 from action_msgs.msg import GoalStatus
 from geometry_msgs.msg import PoseStamped, Twist
 from nav_msgs.msg import Odometry
-from nav2_msgs.action import NavigateThroughPoses, NavigateToPose  # ← spiral client
-from nav2_msgs.msg import SpeedLimit
-from rcl_interfaces.msg import Parameter, ParameterType, ParameterValue
-from rcl_interfaces.srv import SetParameters
-from std_srvs.srv import Empty, Trigger
+from nav2_msgs.action import NavigateThroughPoses, NavigateToPose
+from rcl_interfaces.msg import SetParametersResult
+from std_srvs.srv import Trigger
 
 
 class DockState(Enum):
-    IDLE                = auto()   # waiting for operator RViz zone goal
-    COMMUTING           = auto()   # driving to RViz zone; tag detections locked out
-    VISUAL_HOMING       = auto()   # driving toward detected tag to get a close-range re-scan
-    LOCAL_SEARCH        = auto()   # expanding spiral sweep
-    BUFFERING_ROUGH     = auto()
-    NAV_TO_STAGING      = auto()
-    BUFFERING_PRECISION = auto()
-    NAV_TO_DOCK         = auto()
-    LOCKED              = auto()
-    ABORTED             = auto()   # overshoot kill-switch or spiral exhausted
+    IDLE              = auto()
+    COMMUTING         = auto()
+    VISUAL_HOMING     = auto()
+    LOCAL_SEARCH      = auto()
+    BUFFERING_ROUGH   = auto()
+    NAV_TO_STAGING    = auto()
+    VISUAL_SERVO_DOCK = auto()
+    DOCKED            = auto()
+    ABORTED           = auto()
 
 
 # ── pure helpers ──────────────────────────────────────────────────────────────
@@ -75,17 +71,16 @@ def _circular_mean(angles: list[float]) -> float:
 
 
 def _outlier_mean(vals: list[float]) -> float:
-    """Strip 2 highest and 2 lowest; mean of the rest."""
     if len(vals) < 6:
         return sum(vals) / len(vals)
     s = sorted(vals)
-    trimmed = s[2:-2]
-    return sum(trimmed) / len(trimmed)
+    return sum(s[2:-2]) / len(s[2:-2])
 
 
 def _pose_stamped(x: float, y: float, yaw: float, frame: str = 'odom') -> PoseStamped:
     p = PoseStamped()
     p.header.frame_id = frame
+    p.header.stamp = rclpy.time.Time().to_msg()   # zero stamp → use latest TF, no extrapolation
     p.pose.position.x = x
     p.pose.position.y = y
     q = tft.quaternion_from_euler(0.0, 0.0, yaw)
@@ -100,40 +95,24 @@ def _wrap_pi(angle: float) -> float:
 
 def _gen_spiral_waypoints(node: 'DockingSupervisor',
                            x0: float, y0: float) -> list[PoseStamped]:
-    """
-    Archimedean spiral centred at (x0, y0).
-
-    r(θ) = R_MAX · θ / (2π · REVS)  →  r = 0 at θ=0, r = R_MAX at θ = 2π·REVS
-
-    Yaw is set to the tangent of the spiral so the robot always faces its
-    direction of travel.  Step size π/4 gives 16 waypoints for 2 revolutions.
-    """
     R_MAX = 1.5
     REVS  = 2.0
     STEP  = math.pi / 4
-    total = 2.0 * math.pi * REVS          # 4π
-    a     = R_MAX / total                  # r = a·θ
+    total = 2.0 * math.pi * REVS
+    a     = R_MAX / total
 
-    now = node.get_clock().now().to_msg()
     waypoints: list[PoseStamped] = []
-
-    theta = STEP                           # skip θ=0 (r=0, robot already there)
+    theta = STEP
     while theta <= total + 1e-9:
-        r  = a * theta
-        x  = x0 + r * math.cos(theta)
-        y  = y0 + r * math.sin(theta)
-
-        # Tangent direction: d/dθ (r cosθ, r sinθ) = (a cosθ − r sinθ, a sinθ + r cosθ)
+        r   = a * theta
+        x   = x0 + r * math.cos(theta)
+        y   = y0 + r * math.sin(theta)
         tx  = a * math.cos(theta) - r * math.sin(theta)
         ty  = a * math.sin(theta) + r * math.cos(theta)
         yaw = math.atan2(ty, tx)
-
-        p = _pose_stamped(x, y, yaw, 'odom')
-        p.header.stamp = now
-        waypoints.append(p)
+        waypoints.append(_pose_stamped(x, y, yaw, 'odom'))
         theta += STEP
-
-    return waypoints   # 16 waypoints
+    return waypoints
 
 
 # ── node ──────────────────────────────────────────────────────────────────────
@@ -141,27 +120,24 @@ def _gen_spiral_waypoints(node: 'DockingSupervisor',
 class DockingSupervisor(Node):
 
     # Tuneable constants
-    APPROACH_DIST_ROUGH  = 0.50   # m — staging standoff from box centre
-    BUF_ROUGH            = 10     # samples before staging nav
-    BUF_PRECISION        = 10     # samples before final dock nav
-    PROXIMITY_TRIGGER_M          = 0.85   # m — marker-3 camera distance → BUFFERING_PRECISION
-    VISUAL_HOMING_CLOSE_M        = 0.60   # m — camera distance threshold to exit visual homing
-    VISUAL_HOMING_NAV_STANDOFF_M = 0.30   # m — nav goal standoff from marker in odom frame
-    DOCK_SPEED_LIMIT     = 0.20   # m/s — speed cap during final approach
-    OVERSHOOT_ARM_M      = 0.04   # m — arm kill-switch when robot enters this radius
-    OVERSHOOT_DELTA_M    = 0.02   # m — abort if robot moves away by this much once armed
+    APPROACH_DIST_ROUGH          = 0.50   # m — staging standoff from box centre
+    BUF_ROUGH                    = 10     # samples before firing staging goal
+    PROXIMITY_TRIGGER_M          = 0.85   # m — marker-3 camera distance → VISUAL_SERVO_DOCK
+    VISUAL_HOMING_CLOSE_M        = 0.60   # m — camera distance to exit visual homing
+    VISUAL_HOMING_NAV_STANDOFF_M = 0.30   # m — nav goal standoff from marker (odom frame)
+    BOX_LENGTH                   = 0.30   # m — dock condition: marker_z ≤ BOX_LENGTH / 2
 
-    INFLATION_RADIUS_PRECISION = 0.11    # > 0.05 inscribed (10×10 cm footprint) — no C++ crash
-    INFLATION_SCALE_PRECISION  = 100.0
-    INFLATION_RADIUS_NORMAL    = 0.45    # m — restored after reset
-    INFLATION_SCALE_NORMAL     = 10.0    # restored after reset
+    # Visual servo — Pure Pursuit + blind dead-reckoning
+    BLIND_APPROACH_THRESHOLD     = 0.35   # m — switch to encoder dead-reckoning below this
+    TARGET_STANDOFF              = 0.20   # m — stop this far from the tag face
+    HARDWARE_BIAS_X              = 0.00   # m — camera lateral offset (camera at y=0 in base_link)
+    LOOKAHEAD_DIST               = 0.15   # m — pure pursuit carrot projection distance
+    K_STEER                      = 1.5    # rad/s per rad — steering gain
+    FRICTION_DEADBAND            = 0.0   # rad/s — minimum wz to overcome static friction
+    MAX_WZ                       = 3.5    # rad/s — angular velocity clamp
+    V_LINEAR                     = 0.2   # m/s  — constant forward speed during servo
 
-    _FP_DOCK   = '[[-0.05,-0.05],[-0.05,0.05],[0.05,0.05],[0.05,-0.05]]'   # 10×10 cm
-    _FP_NORMAL = '[[-0.09,-0.08],[0.09,-0.08],[0.09,0.08],[-0.09,0.08]]'   # 18×16 cm
-
-    _CSV_DIR = os.path.join(
-        os.path.expanduser('~'), 'ros2_ws', 'src', 'parking', 'results',
-    )
+    _CSV_DIR = os.path.join(os.path.expanduser('~'), 'ros2_ws', 'src', 'parking', 'results')
 
     def __init__(self):
         super().__init__('docking_supervisor')
@@ -169,41 +145,68 @@ class DockingSupervisor(Node):
         # ── state machine ────────────────────────────────────────────────────
         self._state = DockState.IDLE
         self._lock  = threading.Lock()
-
         self._rough_buf: list[tuple[float, float, float]] = []
-        self._prec_buf:  list[tuple[float, float, float]] = []
         self._current_goal_handle = None
+
+        # ── visual servo state ───────────────────────────────────────────────
+        self._last_servo_marker_x:       float = 0.0
+        self._last_servo_marker_z:       float = 1.0
+        self._last_servo_detection_time: float = 0.0
+        self._last_servo_marker_yaw:     float = 0.0
+        self._last_servo_tag_odom:       tuple[float, float] = (0.0, 0.0)  # tag in odom frame (logging only)
+        self._last_servo_dock_yaw:       float        = 0.0   # dock Z-axis direction in odom (logging only)
+        self._last_servo_z_base:         tuple        = (1.0, 0.0)  # approach dir (ax,ay) in base_link
+        # blind dead-reckoning state
+        self.in_blind_approach: bool       = False
+        self.blind_start_pose:  tuple | None = None
+        self.blind_target_dist: float      = 0.0
+
+        # ── dynamic tuning parameters ─────────────────────────────────────────
+        self.declare_parameter('lookahead_dist',          0.15)
+        self.declare_parameter('k_steer',                 1.5) # pure-pursuit scale (1.0 = textbook)
+        self.declare_parameter('friction_deadband',       0.0)
+        self.declare_parameter('max_wz',                  3.5)
+        self.declare_parameter('v_linear',                0.20)
+        self.declare_parameter('target_standoff',         0.20)
+        self.declare_parameter('blind_approach_threshold', 0.35)
+        self.declare_parameter('align_threshold_deg',     12.0)
+
+        self.lookahead_dist           = self.get_parameter('lookahead_dist').value
+        self.k_steer                  = self.get_parameter('k_steer').value
+        self.friction_deadband        = self.get_parameter('friction_deadband').value
+        self.max_wz                   = self.get_parameter('max_wz').value
+        self.v_linear                 = self.get_parameter('v_linear').value
+        self.target_standoff          = self.get_parameter('target_standoff').value
+        self.blind_approach_threshold = self.get_parameter('blind_approach_threshold').value
+        self.align_threshold_deg      = self.get_parameter('align_threshold_deg').value
+
+        self.add_on_set_parameters_callback(self._parameter_callback)
 
         # ── thesis data logger ───────────────────────────────────────────────
         self._csv_lock = threading.Lock()
         self._run_id   = datetime.now().strftime('%Y%m%d_%H%M%S')
-        self._CSV_PATH       = os.path.join(self._CSV_DIR, f'docking_events_{self._run_id}.csv')
-        self._telem_CSV_PATH = os.path.join(self._CSV_DIR, f'docking_telemetry_{self._run_id}.csv')
+        self._CSV_PATH         = os.path.join(self._CSV_DIR, f'docking_events_{self._run_id}.csv')
         self._summary_CSV_PATH = os.path.join(self._CSV_DIR, 'docking_summary.csv')
+        self._servo_debug_CSV: str = ''  # set fresh each time servo is entered
         self._init_csv()
-        self._init_telemetry_csv()
 
-        # ── mission-end tracking ─────────────────────────────────────────────
-        self._mission_logged = False
-        self._run_start_time = time.time()
+        # ── mission tracking ─────────────────────────────────────────────────
+        self._mission_logged      = False
+        self._run_start_time      = time.time()
+        self._reference_dock_pose: tuple[float, float, float] = (0.0, 0.0, 0.0)
+        self._last_odom_pose:      tuple[float, float, float] = (0.0, 0.0, 0.0)
 
         # ── cmd_vel monitor ──────────────────────────────────────────────────
         self.latest_vx: float = 0.0
         self.latest_wz: float = 0.0
 
-        # ── overshoot kill-switch state ──────────────────────────────────────
-        self._reference_dock_pose: tuple[float, float, float] = (0.0, 0.0, 0.0)
-        self._last_odom_pose:      tuple[float, float, float] = (0.0, 0.0, 0.0)
-        self.min_distance_to_goal: float = float('inf')  # armed watermark
-
         # ── per-marker debug telemetry ───────────────────────────────────────
-        # {marker_id: (last_seen_ns, dist_m)}
         self._marker_seen: dict[int, tuple[int, float]] = {}
 
         # ── callback groups ──────────────────────────────────────────────────
         cb_sub    = ReentrantCallbackGroup()
         cb_nav    = MutuallyExclusiveCallbackGroup()
-        cb_spiral = MutuallyExclusiveCallbackGroup()   # separate from cb_nav
+        cb_spiral = MutuallyExclusiveCallbackGroup()
         cb_srv    = MutuallyExclusiveCallbackGroup()
 
         be_qos = QoSProfile(
@@ -223,73 +226,34 @@ class DockingSupervisor(Node):
                 lambda msg, mid=_mid: self._on_any_marker(msg, mid),
                 be_qos, callback_group=cb_sub,
             )
-        self.create_subscription(
-            Odometry, '/odom',
-            self._on_odom, 10, callback_group=cb_sub,
-        )
-        self.create_subscription(
-            PoseStamped, '/goal_pose',
-            self._on_goal_pose, 10, callback_group=cb_sub,
-        )
-        self.create_subscription(
-            Twist, '/cmd_vel',
-            self._on_cmd_vel, 10, callback_group=cb_sub,
-        )
+        self.create_subscription(Odometry,    '/odom',      self._on_odom,     10, callback_group=cb_sub)
+        self.create_subscription(PoseStamped, '/goal_pose', self._on_goal_pose, 10, callback_group=cb_sub)
+        self.create_subscription(Twist,       '/cmd_vel',   self._on_cmd_vel,  10, callback_group=cb_sub)
 
         # ── publishers ───────────────────────────────────────────────────────
-        self._cmd_pub   = self.create_publisher(Twist,      '/cmd_vel',     10)
-        self._speed_pub = self.create_publisher(SpeedLimit, '/speed_limit', 10)
+        self._cmd_pub = self.create_publisher(Twist, '/cmd_vel', 10)
 
         # ── action clients ───────────────────────────────────────────────────
         self._nav_client = ActionClient(
-            self, NavigateToPose, 'navigate_to_pose',
-            callback_group=cb_nav,
+            self, NavigateToPose, 'navigate_to_pose', callback_group=cb_nav,
         )
         self._spiral_client = ActionClient(
-            self, NavigateThroughPoses, 'navigate_through_poses',
-            callback_group=cb_spiral,
+            self, NavigateThroughPoses, 'navigate_through_poses', callback_group=cb_spiral,
         )
 
-        # ── footprint + costmap-clear service clients ─────────────────────────
-        self._fp_client = self.create_client(
-            SetParameters, '/local_costmap/local_costmap/set_parameters',
-            callback_group=cb_srv,
-        )
-        self._fp_global_client = self.create_client(
-            SetParameters, '/global_costmap/global_costmap/set_parameters',
-            callback_group=cb_srv,
-        )
-        self._clear_local_client = self.create_client(
-            Empty, '/local_costmap/local_costmap/clear_entirely_local_costmap',
-            callback_group=cb_srv,
-        )
-        self._clear_global_client = self.create_client(
-            Empty, '/global_costmap/global_costmap/clear_entirely_global_costmap',
-            callback_group=cb_srv,
-        )
-        self._velocity_smoother_client = self.create_client(
-            SetParameters, '/velocity_smoother/set_parameters',
-            callback_group=cb_srv,
-        )
-
-        # ── 1 Hz debug telemetry timer ───────────────────────────────────────
-        self.create_timer(1.0, self._debug_marker3_cb, callback_group=cb_sub)
-
-        # ── 2 Hz CSV telemetry timer (CPU/GPU/cmd_vel/state) ─────────────────
-        self.create_timer(0.5, self._telemetry_cb, callback_group=cb_sub)
+        # ── timers ───────────────────────────────────────────────────────────
+        self.create_timer(1.0, self._debug_marker_cb,    callback_group=cb_sub)
+        self._servo_timer = self.create_timer(0.1, self._servo_control_loop, callback_group=cb_sub)
 
         # ── reset service ────────────────────────────────────────────────────
-        self.create_service(
-            Trigger, '~/reset_mission',
-            self._on_reset, callback_group=cb_srv,
-        )
+        self.create_service(Trigger, '~/reset_mission', self._on_reset, callback_group=cb_srv)
 
-        self.log_event('NODE_START', 'DockingSupervisor initialised')
+        self.log_event('NODE_START', 'DockingSupervisor (RPP + Visual Servo) initialised')
         self.get_logger().info('DockingSupervisor ready — IDLE  (send RViz 2D Nav Goal to begin)')
 
-    # ── 1 Hz debug telemetry ─────────────────────────────────────────────────
+    # ── 1 Hz debug ───────────────────────────────────────────────────────────
 
-    def _debug_marker3_cb(self):
+    def _debug_marker_cb(self):
         now_ns = self.get_clock().now().nanoseconds
         visible = [
             f'Marker {mid} ({dist:.2f} m)'
@@ -299,50 +263,9 @@ class DockingSupervisor(Node):
         if visible:
             self.get_logger().info('[DEBUG] VISIBLE: ' + '  |  '.join(visible))
 
-    # ── telemetry CSV init ────────────────────────────────────────────────────
-
-    def _init_telemetry_csv(self):
-        os.makedirs(self._CSV_DIR, exist_ok=True)
-        with self._csv_lock:
-            with open(self._telem_CSV_PATH, 'w', newline='') as f:
-                csv.writer(f).writerow(
-                    ['elapsed_s', 'timestamp_iso', 'state',
-                     'cpu_pct', 'ram_pct', 'gpu_pct', 'cmd_vel_x', 'cmd_vel_z']
-                )
-
-    # ── GPU reader ────────────────────────────────────────────────────────────
-
-    @staticmethod
-    def _read_gpu_load() -> float:
-        try:
-            with open('/sys/devices/gpu.0/load') as f:
-                return float(f.read().strip()) / 10.0
-        except OSError:
-            return 0.0
-
-    # ── cmd_vel monitor ───────────────────────────────────────────────────────
-
     def _on_cmd_vel(self, msg: Twist):
         self.latest_vx = msg.linear.x
         self.latest_wz = msg.angular.z
-
-    # ── 2 Hz telemetry callback ───────────────────────────────────────────────
-
-    def _telemetry_cb(self):
-        elapsed = time.time() - self._run_start_time
-        now_iso = datetime.now().strftime('%Y-%m-%dT%H:%M:%S.%f')
-        with self._lock:
-            state_name = self._state.name
-        cpu = psutil.cpu_percent(interval=None)
-        ram = psutil.virtual_memory().percent
-        gpu = self._read_gpu_load()
-        with self._csv_lock:
-            with open(self._telem_CSV_PATH, 'a', newline='') as f:
-                csv.writer(f).writerow(
-                    [f'{elapsed:.2f}', now_iso, state_name,
-                     f'{cpu:.1f}', f'{ram:.1f}', f'{gpu:.1f}',
-                     f'{self.latest_vx:.4f}', f'{self.latest_wz:.4f}']
-                )
 
     # ── end-of-mission summary ────────────────────────────────────────────────
 
@@ -356,25 +279,16 @@ class DockingSupervisor(Node):
         got_dock_goal = (gx, gy) != (0.0, 0.0)
 
         if got_dock_goal:
-            pose_err = math.sqrt((rx - gx)**2 + (ry - gy)**2)
+            pose_err = math.sqrt((rx - gx) ** 2 + (ry - gy) ** 2)
             yaw_err  = abs(_wrap_pi(ryaw - gyaw))
         else:
             pose_err = yaw_err = float('nan')
 
-        # Visible terminal banner
-        sep = '=' * 56
         self.get_logger().info(
-            f'\n{sep}\n'
-            f'  MISSION END\n'
-            f'  Result     : {result}\n'
-            + (f'  Pose Error : {pose_err:.4f} m\n'
-               f'  Yaw Error  : {yaw_err:.4f} rad\n'
-               if got_dock_goal else
-               '  (No dock goal reached — no pose error computed)\n')
-            + sep
+            f'MISSION END | Result: {result} | '
+            f'Pose Error: {pose_err:.2f} m | Yaw Error: {yaw_err:.2f} rad'
         )
 
-        # Append to shared summary CSV (one row per run)
         write_header = (
             not os.path.exists(self._summary_CSV_PATH)
             or os.path.getsize(self._summary_CSV_PATH) == 0
@@ -391,24 +305,21 @@ class DockingSupervisor(Node):
                     datetime.now().strftime('%Y-%m-%dT%H:%M:%S'),
                     result,
                     f'{pose_err:.6f}' if got_dock_goal else '',
-                    f'{yaw_err:.6f}' if got_dock_goal else '',
+                    f'{yaw_err:.6f}'  if got_dock_goal else '',
                     f'{gx:.4f}', f'{gy:.4f}',
                     f'{math.degrees(gyaw):.2f}',
                 ])
 
-        # Reset velocity so next telemetry rows are clean
         self.latest_vx = 0.0
         self.latest_wz = 0.0
 
-    # ── CSV logger ────────────────────────────────────────────────────────────
+    # ── CSV event logger ──────────────────────────────────────────────────────
 
     def _init_csv(self):
         os.makedirs(self._CSV_DIR, exist_ok=True)
         with self._csv_lock:
             with open(self._CSV_PATH, 'w', newline='') as f:
-                csv.writer(f).writerow(
-                    ['timestamp_iso', 'event_type', 'description', 'value']
-                )
+                csv.writer(f).writerow(['timestamp_iso', 'event_type', 'description', 'value'])
 
     def log_event(self, event_type: str, description: str, value: str = ''):
         now = datetime.now().strftime('%Y-%m-%dT%H:%M:%S.%f')
@@ -416,25 +327,294 @@ class DockingSupervisor(Node):
             with open(self._CSV_PATH, 'a', newline='') as f:
                 csv.writer(f).writerow([now, event_type, description, value])
 
-    # ── spiral generation + execution ─────────────────────────────────────────
+    # ── servo debug CSV ───────────────────────────────────────────────────────
+
+    def _init_servo_debug_csv(self):
+        attempt_id = datetime.now().strftime('%Y%m%d_%H%M%S')
+        self._servo_debug_CSV = os.path.join(self._CSV_DIR, f'servo_debug_{attempt_id}.csv')
+        self._run_start_time  = time.time()
+        os.makedirs(self._CSV_DIR, exist_ok=True)
+        self.get_logger().info(f'[SERVO] New debug CSV: servo_debug_{attempt_id}.csv')
+        with self._csv_lock:
+            with open(self._servo_debug_CSV, 'w', newline='') as f:
+                csv.writer(f).writerow([
+                    # bookkeeping
+                    'wall_time', 'elapsed_s', 'phase',
+                    # camera frame (raw sensor)
+                    'cam_tag_x_m', 'cam_tag_z_m', 'cam_tag_dist_m',
+                    'cam_marker_yaw_deg',
+                    # odom frame — robot
+                    'robot_x', 'robot_y', 'robot_yaw_deg',
+                    # odom frame — tag & dock
+                    'tag_odom_x', 'tag_odom_y', 'dock_approach_yaw_deg',
+                    # pure-pursuit geometry
+                    't_robot_m', 'lat_err_m',
+                    't_carrot_m', 'carrot_odom_x', 'carrot_odom_y',
+                    'angle_to_carrot_deg', 'heading_err_deg',
+                    # controller pipeline (separate stages so we can see where saturation hits)
+                    'wz_proportional',   # k_steer * heading_err (raw P output)
+                    'wz_after_deadband', # after friction boost / zero-out
+                    'wz_commanded',      # after max_wz clamp  ← what goes to robot
+                    'vx_commanded',
+                    # active parameter snapshot (can change mid-run via ros2 param set)
+                    'k_steer', 'friction_deadband', 'lookahead_dist',
+                    'max_wz', 'v_linear',
+                    # what the robot actually published (from /cmd_vel echo)
+                    'actual_vx', 'actual_wz',
+                ])
+
+    def _log_servo_tick(self, phase: str,
+                        cam_tag_x: float, cam_tag_z: float,
+                        rx: float, ry: float, ryaw: float,
+                        tag_ox: float, tag_oy: float, dock_yaw: float,
+                        t_robot: float, lat_err: float,
+                        t_carrot: float, carrot_ox: float, carrot_oy: float,
+                        angle_to_carrot: float, heading_error: float,
+                        wz_prop: float, wz_deadband: float, wz_cmd: float,
+                        vx_cmd: float):
+        if not self._servo_debug_CSV:
+            return
+        elapsed = time.time() - self._run_start_time
+        cam_dist = math.sqrt(cam_tag_x ** 2 + cam_tag_z ** 2)
+        with self._csv_lock:
+            with open(self._servo_debug_CSV, 'a', newline='') as f:
+                csv.writer(f).writerow([
+                    f'{time.time():.4f}', f'{elapsed:.3f}', phase,
+                    f'{cam_tag_x:.4f}', f'{cam_tag_z:.4f}', f'{cam_dist:.4f}',
+                    f'{math.degrees(self._last_servo_marker_yaw):.2f}',
+                    f'{rx:.4f}', f'{ry:.4f}', f'{math.degrees(ryaw):.2f}',
+                    f'{tag_ox:.4f}', f'{tag_oy:.4f}', f'{math.degrees(dock_yaw):.2f}',
+                    f'{t_robot:.4f}', f'{lat_err:.4f}',
+                    f'{t_carrot:.4f}', f'{carrot_ox:.4f}', f'{carrot_oy:.4f}',
+                    f'{math.degrees(angle_to_carrot):.2f}',
+                    f'{math.degrees(heading_error):.2f}',
+                    f'{wz_prop:.4f}', f'{wz_deadband:.4f}', f'{wz_cmd:.4f}',
+                    f'{vx_cmd:.4f}',
+                    f'{self.k_steer:.3f}', f'{self.friction_deadband:.3f}',
+                    f'{self.lookahead_dist:.3f}', f'{self.max_wz:.3f}',
+                    f'{self.v_linear:.3f}',
+                    f'{self.latest_vx:.4f}', f'{self.latest_wz:.4f}',
+                ])
+
+    # ── VISUAL SERVO CONTROL LOOP (10 Hz) ────────────────────────────────────
+    # Phase 1: Pure Pursuit (virtual carrot) until BLIND_APPROACH_THRESHOLD.
+    # Phase 2: Blind dead-reckoning (encoder odometry only) for the final
+    #          centimetres where the camera loses accuracy near the tag.
+
+    def _servo_control_loop(self):
+        with self._lock:
+            if self._state != DockState.VISUAL_SERVO_DOCK:
+                return
+
+        # ── Phase 2: Blind dead-reckoning ────────────────────────────────────
+        if self.in_blind_approach:
+            rx, ry, _ = self._last_odom_pose
+            sx, sy    = self.blind_start_pose
+            dist_traveled = math.sqrt((rx - sx) ** 2 + (ry - sy) ** 2)
+
+            if dist_traveled >= self.blind_target_dist:
+                self._stop_robot()
+                self.get_logger().info(
+                    f'Blind approach complete — standoff {self.target_standoff:.2f} m reached. '
+                    'MISSION SUCCESS'
+                )
+                self.log_event('MISSION_SUCCESS', 'Blind approach: standoff reached',
+                               f'traveled={dist_traveled:.3f} target={self.blind_target_dist:.3f}')
+                with self._lock:
+                    self._state = DockState.DOCKED
+                self._log_mission_end('SUCCESS')
+                return
+
+            twist = Twist()
+            twist.linear.x  = self.v_linear
+            twist.angular.z = 0.0
+            rx, ry, ryaw = self._last_odom_pose
+            tag_ox, tag_oy = self._last_servo_tag_odom
+            _, _, dock_yaw = self._reference_dock_pose
+            self._log_servo_tick(
+                phase='BLIND',
+                cam_tag_x=self._last_servo_marker_x, cam_tag_z=self._last_servo_marker_z,
+                rx=rx, ry=ry, ryaw=ryaw,
+                tag_ox=tag_ox, tag_oy=tag_oy, dock_yaw=dock_yaw,
+                t_robot=0.0, lat_err=0.0,
+                t_carrot=0.0, carrot_ox=0.0, carrot_oy=0.0,
+                angle_to_carrot=0.0, heading_error=0.0,
+                wz_prop=0.0, wz_deadband=0.0, wz_cmd=0.0,
+                vx_cmd=self.v_linear,
+            )
+            self._cmd_pub.publish(twist)
+            return
+
+        # ── Safety: tag-lost handling ─────────────────────────────────────────
+        tag_age = time.time() - self._last_servo_detection_time
+        if tag_age > 0.5 and self._last_servo_marker_z < 0.5:
+            # Tag went out of view at close range — estimate remaining distance
+            # from last known z, compensating for travel since detection was lost.
+            est_z   = max(0.0, self._last_servo_marker_z - tag_age * self.v_linear)
+            remaining = est_z - self.target_standoff
+            rx, ry, _ = self._last_odom_pose
+            self.get_logger().warn(
+                f'Tag lost {tag_age:.2f}s ago (last_z={self._last_servo_marker_z:.3f}m, '
+                f'est_z={est_z:.3f}m) — handoff to blind approach, remaining={remaining:.3f}m'
+            )
+            self.log_event('BLIND_APPROACH', 'Tag lost at close range — blind handoff',
+                           f'last_z={self._last_servo_marker_z:.3f} est_z={est_z:.3f} '
+                           f'tag_age={tag_age:.2f}')
+            if remaining <= 0.0:
+                self._stop_robot()
+                self.log_event('MISSION_SUCCESS', 'Already at standoff on tag-lost handoff', '')
+                with self._lock:
+                    self._state = DockState.DOCKED
+                self._log_mission_end('SUCCESS')
+                return
+            self.blind_start_pose  = (rx, ry)
+            self.blind_target_dist = remaining
+            self.in_blind_approach = True
+            twist = Twist()
+            twist.linear.x  = self.v_linear
+            twist.angular.z = 0.0
+            self._cmd_pub.publish(twist)
+            return
+        if tag_age > 2.0:
+            self.get_logger().error('Visual servo: marker-3 lost for >2 s — ABORTED')
+            self.log_event('SAFETY_ABORT', 'Visual servo: marker lost >2 s')
+            self._stop_robot()
+            with self._lock:
+                self._state = DockState.ABORTED
+            self._log_mission_end('ABORT')
+            return
+
+        marker_z   = self._last_servo_marker_z
+        marker_x   = self._last_servo_marker_x
+        marker_yaw = self._last_servo_marker_yaw
+
+        # ── Handoff: enter blind approach when close enough ───────────────────
+        if marker_z <= self.blind_approach_threshold:
+            remaining = self.blind_approach_threshold - self.target_standoff
+            if remaining <= 0.0:
+                self._stop_robot()
+                self.get_logger().info('Already within standoff — MISSION SUCCESS')
+                self.log_event('MISSION_SUCCESS', 'Already at standoff on blind handoff',
+                               f'marker_z={marker_z:.3f}')
+                with self._lock:
+                    self._state = DockState.DOCKED
+                self._log_mission_end('SUCCESS')
+                return
+            rx, ry, _          = self._last_odom_pose
+            self.blind_start_pose  = (rx, ry)
+            self.blind_target_dist = remaining
+            self.in_blind_approach = True
+            self.get_logger().info(
+                f'Entering blind approach — marker_z={marker_z:.3f} m, '
+                f'driving {remaining:.3f} m straight by encoders'
+            )
+            self.log_event('BLIND_APPROACH', 'Handoff to dead-reckoning',
+                           f'marker_z={marker_z:.3f} target={remaining:.3f}')
+            twist = Twist()
+            twist.linear.x  = self.v_linear
+            twist.angular.z = 0.0
+            self._cmd_pub.publish(twist)
+            return
+
+        # ── Odom-frame pure-pursuit servo ─────────────────────────────────────
+        # Reference frame: odom.  Both the approach direction AND the tag
+        # origin on the centerline are frozen at the first servo tick so that
+        # subsequent odom jumps or repeated detections cannot shift the
+        # centerline mid-run.  Only robot_odom updates each tick, which is
+        # what makes the carrot move along the line as the robot progresses.
+        #
+        # Sign convention: dock_yaw points INTO the dock face (tag Z-axis).
+        # Robot on the correct approach side → t_robot < 0.
+        # Carrot: t_carrot = min(-standoff, t_robot + lookahead)
+        #   • t_robot + lookahead is less-negative = one step closer to dock ✓
+        #   • min(-standoff, …) caps it so carrot never goes past the standoff ✓
+        rx, ry, ryaw = self._last_odom_pose
+
+        # ── freeze approach direction at first tick ───────────────────────────
+        approach_yaw = self._servo_approach_yaw
+        if approach_yaw is None:
+            approach_yaw = self._last_servo_dock_yaw
+            self._servo_approach_yaw = approach_yaw
+            self.get_logger().info(
+                f'[SERVO] Approach dir frozen: {math.degrees(approach_yaw):.1f}° (odom)'
+            )
+
+        # ── freeze tag odom at first tick ─────────────────────────────────────
+        if self._servo_tag_odom_frozen is None:
+            self._servo_tag_odom_frozen = self._last_servo_tag_odom
+            self.get_logger().info(
+                f'[SERVO] Tag odom frozen: '
+                f'({self._servo_tag_odom_frozen[0]:.3f}, {self._servo_tag_odom_frozen[1]:.3f})'
+            )
+
+        dock_yaw    = approach_yaw
+        approach_ax = math.cos(dock_yaw)
+        approach_ay = math.sin(dock_yaw)
+        tag_ox, tag_oy = self._servo_tag_odom_frozen
+
+        # Project robot onto centerline parameterised from tag origin
+        dx      = rx - tag_ox
+        dy      = ry - tag_oy
+        t_robot = dx * approach_ax + dy * approach_ay   # < 0 on approach side
+        lat_err = -dx * approach_ay + dy * approach_ax  # signed lateral error
+
+        # Carrot: lookahead ahead of robot (less-negative t), capped at standoff
+        t_carrot        = min(-self.target_standoff, t_robot + self.lookahead_dist)
+        carrot_ox       = tag_ox + t_carrot * approach_ax
+        carrot_oy       = tag_oy + t_carrot * approach_ay
+        L_carrot        = math.hypot(carrot_ox - rx, carrot_oy - ry)
+        angle_to_carrot = math.atan2(carrot_oy - ry, carrot_ox - rx)
+        heading_error   = _wrap_pi(angle_to_carrot - ryaw)
+
+        wz_prop = (self.k_steer * self.v_linear * 2.0 * math.sin(heading_error) / L_carrot
+                   if L_carrot > 0.02 else 0.0)
+        vx_cmd  = self.v_linear
+
+        wz_deadband = wz_prop
+        if abs(heading_error) > 0.02:
+            if 0.0 < wz_deadband < self.friction_deadband:
+                wz_deadband = self.friction_deadband
+            elif -self.friction_deadband < wz_deadband < 0.0:
+                wz_deadband = -self.friction_deadband
+        else:
+            wz_deadband = 0.0
+
+        wz_cmd = max(-self.max_wz, min(self.max_wz, wz_deadband))
+
+        twist = Twist()
+        twist.linear.x  = vx_cmd
+        twist.angular.z = wz_cmd
+        self.get_logger().info(
+            f'[SERVO] lat={lat_err:.3f}m t={t_robot:.2f}m '
+            f'hdg={math.degrees(heading_error):.1f}° wz={wz_cmd:.2f} cam_x={marker_x:.3f}'
+        )
+        self._log_servo_tick(
+            phase='SERVO',
+            cam_tag_x=marker_x, cam_tag_z=marker_z,
+            rx=rx, ry=ry, ryaw=ryaw,
+            tag_ox=tag_ox, tag_oy=tag_oy, dock_yaw=dock_yaw,
+            t_robot=t_robot, lat_err=lat_err,
+            t_carrot=t_carrot, carrot_ox=carrot_ox, carrot_oy=carrot_oy,
+            angle_to_carrot=angle_to_carrot, heading_error=heading_error,
+            wz_prop=wz_prop, wz_deadband=wz_deadband, wz_cmd=wz_cmd,
+            vx_cmd=vx_cmd,
+        )
+        self._cmd_pub.publish(twist)
+
+    # ── spiral search ─────────────────────────────────────────────────────────
 
     def _fire_local_search(self):
         x0, y0, _ = self._last_odom_pose
         waypoints  = _gen_spiral_waypoints(self, x0, y0)
 
         self.get_logger().info(
-            f'Spiral: origin=({x0:.2f},{y0:.2f})  '
-            f'{len(waypoints)} waypoints  r_max=1.5 m'
+            f'Spiral: origin=({x0:.2f},{y0:.2f})  {len(waypoints)} waypoints'
         )
-        self.log_event(
-            'STATE_CHANGE', 'Transitioned to LOCAL_SEARCH',
-            f'origin=({x0:.2f},{y0:.2f}) waypoints={len(waypoints)}',
-        )
+        self.log_event('STATE_CHANGE', 'Transitioned to LOCAL_SEARCH',
+                       f'origin=({x0:.2f},{y0:.2f})')
 
         if not self._spiral_client.wait_for_server(timeout_sec=5.0):
-            self.get_logger().error(
-                'NavigateThroughPoses server unavailable — ABORTED'
-            )
+            self.get_logger().error('NavigateThroughPoses unavailable — ABORTED')
             self.log_event('SAFETY_ABORT', 'NavigateThroughPoses server unavailable')
             with self._lock:
                 self._state = DockState.ABORTED
@@ -443,20 +623,18 @@ class DockingSupervisor(Node):
 
         goal = NavigateThroughPoses.Goal()
         goal.poses = waypoints
-
         future = self._spiral_client.send_goal_async(goal)
         future.add_done_callback(self._spiral_accepted_cb)
 
     def _spiral_accepted_cb(self, future):
         handle = future.result()
         if not handle or not handle.accepted:
-            self.get_logger().error('Spiral goal rejected — back to IDLE')
+            self.get_logger().error('Spiral goal rejected — IDLE')
             self.log_event('ERROR', 'NavigateThroughPoses goal rejected')
             with self._lock:
                 self._state = DockState.IDLE
             return
-
-        self.log_event('GOAL_ACCEPTED', 'Spiral NavigateThroughPoses goal accepted')
+        self.log_event('GOAL_ACCEPTED', 'Spiral accepted')
         with self._lock:
             self._current_goal_handle = handle
         handle.get_result_async().add_done_callback(self._local_search_done_cb)
@@ -468,41 +646,22 @@ class DockingSupervisor(Node):
         with self._lock:
             state = self._state
 
-        # Tag was detected mid-spiral: state already changed to BUFFERING_* or
-        # VISUAL_HOMING by _on_box_pose / _on_marker3 — nothing left to do here.
-        if state in (DockState.BUFFERING_ROUGH, DockState.BUFFERING_PRECISION,
-                     DockState.VISUAL_HOMING):
-            return
+        if state in (DockState.BUFFERING_ROUGH, DockState.VISUAL_HOMING,
+                     DockState.VISUAL_SERVO_DOCK, DockState.DOCKED):
+            return  # tag found mid-spiral — docking path already active
 
         if status == GoalStatus.STATUS_SUCCEEDED:
-            # Robot drove the entire spiral and never detected the tag
             self.get_logger().error('Spiral complete — target not found. ABORTED.')
-            self.log_event(
-                'SAFETY_ABORT',
-                'Target not found after expanding radial sweep',
-            )
+            self.log_event('SAFETY_ABORT', 'Target not found after spiral')
             with self._lock:
                 self._state = DockState.ABORTED
             self._stop_robot()
         else:
-            # Cancelled for an unexpected reason — return to IDLE for operator retry
-            self.get_logger().warn(
-                f'Spiral ended unexpectedly (status={status}) — IDLE'
-            )
-            self.log_event(
-                'STATE_CHANGE', 'Transitioned to IDLE',
-                f'spiral_status={status}',
-            )
+            self.get_logger().warn(f'Spiral ended unexpectedly (status={status}) — IDLE')
             with self._lock:
                 self._state = DockState.IDLE
 
     def _zone_nav_done_cb(self, future):
-        """Fires when Nav2 finishes driving to the RViz-clicked zone goal.
-
-        SUCCEEDED + still COMMUTING → robot arrived at zone, no tag seen → start spiral.
-        Any other state             → tag detected mid-drive; docking path already active.
-        Cancelled / failed          → new /goal_pose arrived or Nav2 error; do nothing.
-        """
         result = future.result()
         status = result.status if result else GoalStatus.STATUS_ABORTED
 
@@ -510,48 +669,34 @@ class DockingSupervisor(Node):
             state = self._state
 
         if state != DockState.COMMUTING:
-            # Tag was detected while driving to the zone — nominal docking path is
-            # already running; nothing to do here.
-            return
+            return  # tag detected en route — docking path already active
 
         if status == GoalStatus.STATUS_SUCCEEDED:
-            self.get_logger().info(
-                'Zone goal reached — no tag seen, starting LOCAL_SEARCH spiral'
-            )
-            self.log_event(
-                'STATE_CHANGE', 'Transitioned to LOCAL_SEARCH',
-                'zone goal reached with no tag detection',
-            )
+            self.get_logger().info('Zone reached — no tag seen, starting LOCAL_SEARCH spiral')
+            self.log_event('STATE_CHANGE', 'Transitioned to LOCAL_SEARCH',
+                           'zone reached with no tag detection')
             with self._lock:
                 self._state = DockState.LOCAL_SEARCH
             self._fire_local_search()
         else:
-            # Preempted by a new /goal_pose or Nav2 failure — state stays COMMUTING
-            self.get_logger().info(
-                f'Zone nav ended (status={status}) in COMMUTING — awaiting next goal'
-            )
+            self.get_logger().info(f'Zone nav ended (status={status}) in COMMUTING — awaiting goal')
 
-    # ── box_center_pose callback ───────────────────────────────────────────────
+    # ── box_center_pose — fills BUFFERING_ROUGH only ──────────────────────────
 
     def _on_box_pose(self, msg: PoseStamped):
-        """Fills BUFFERING_ROUGH and BUFFERING_PRECISION sample buffers only.
-
-        All state transitions into/out of COMMUTING, LOCAL_SEARCH, and
-        VISUAL_HOMING are driven by _on_any_marker (camera-frame distances).
-        box_center_pose is only used once the robot is already close and
-        collecting accurate odom-frame samples.
-        """
+        """Accumulates box_center_pose samples. All state transitions are driven
+        by _on_any_marker (camera-frame distances); box_pose is only consumed
+        once the robot is already close and collecting accurate odom-frame data."""
         q = msg.pose.orientation
         _, _, yaw = tft.euler_from_quaternion([q.x, q.y, q.z, q.w])
         sample = (msg.pose.position.x, msg.pose.position.y, yaw)
 
         fire_staging = False
-        fire_dock    = False
 
         with self._lock:
-            if self._state in (DockState.IDLE, DockState.LOCKED, DockState.ABORTED,
+            if self._state in (DockState.IDLE, DockState.DOCKED, DockState.ABORTED,
                                DockState.COMMUTING, DockState.LOCAL_SEARCH,
-                               DockState.VISUAL_HOMING):
+                               DockState.VISUAL_HOMING, DockState.VISUAL_SERVO_DOCK):
                 return
 
             if self._state == DockState.BUFFERING_ROUGH:
@@ -560,33 +705,22 @@ class DockingSupervisor(Node):
                     self._state  = DockState.NAV_TO_STAGING
                     fire_staging = True
 
-            elif self._state == DockState.BUFFERING_PRECISION:
-                self._prec_buf.append(sample)
-                if len(self._prec_buf) >= self.BUF_PRECISION:
-                    self._state = DockState.NAV_TO_DOCK
-                    fire_dock   = True
-
         if fire_staging:
             with self._lock:
                 buf = list(self._rough_buf)
             self._fire_staging_goal(buf)
 
-        if fire_dock:
-            with self._lock:
-                buf = list(self._prec_buf)
-            self._fire_dock_goal(buf)
-
-    # ── marker callbacks — visual homing + precision trigger ─────────────────
+    # ── marker callbacks ──────────────────────────────────────────────────────
 
     def _marker_cam_to_odom(self, p) -> tuple[float, float]:
-        """Transform a camera_optical position to odom (x, y).
+        """Transform camera_optical position to odom (x, y).
 
-        Uses the hardcoded static camera_optical→base_link transform from the
-        launch file (x=0.126 m, yaw=-π/2, roll=-π/2).
-        Rotation matrix:  [[0,0,1], [-1,0,0], [0,-1,0]]
-          bx = p.z + 0.126   (camera Z  → robot forward + lens offset)
-          by = -p.x           (camera X  → -robot lateral  [X_cam right = Y_base left])
-        Then applies the robot's current yaw to get odom coordinates.
+        Hardcoded static camera_optical→base_link transform from launch file:
+          translation x=0.126 m, yaw=-π/2, roll=-π/2
+          rotation matrix: [[0,0,1], [-1,0,0], [0,-1,0]]
+          bx = p.z + 0.126   (camera Z → robot forward + lens offset)
+          by = -p.x           (camera X right → robot Y left, negated)
+        Then rotate by robot yaw to get odom frame.
         """
         bx = p.z + 0.126
         by = -p.x
@@ -596,34 +730,59 @@ class DockingSupervisor(Node):
         return ox, oy
 
     def _on_any_marker(self, msg: PoseStamped, marker_id: int):
-        """State-machine transitions driven entirely by camera-frame marker distance.
+        """All state-machine transitions driven by camera-frame marker distance.
 
-        Priority order (under lock):
-          1. Marker-3 precision trigger  (any homing state, dist < PROXIMITY_TRIGGER_M)
-          2. Visual homing entry         (COMMUTING / LOCAL_SEARCH, dist > VISUAL_HOMING_CLOSE_M)
-          3. Direct BUFFERING_ROUGH      (COMMUTING / LOCAL_SEARCH, dist ≤ VISUAL_HOMING_CLOSE_M)
-          4. Visual homing exit          (VISUAL_HOMING, dist ≤ VISUAL_HOMING_CLOSE_M)
+        Priority:
+          1. Marker-3 precision → VISUAL_SERVO_DOCK   (dist < PROXIMITY_TRIGGER_M)
+          2. Homing entry       → VISUAL_HOMING        (any marker, dist > VISUAL_HOMING_CLOSE_M)
+          3. Direct buffering   → BUFFERING_ROUGH       (any marker, dist ≤ VISUAL_HOMING_CLOSE_M)
+          4. Homing exit        → BUFFERING_ROUGH       (during VISUAL_HOMING, dist ≤ VISUAL_HOMING_CLOSE_M)
         """
-        p = msg.pose.position
-        dist = math.sqrt(p.x**2 + p.y**2 + p.z**2)
+        p    = msg.pose.position
+        dist = math.sqrt(p.x ** 2 + p.y ** 2 + p.z ** 2)
 
         self._marker_seen[marker_id] = (self.get_clock().now().nanoseconds, dist)
 
-        action:   str   = ''
+        # Always update visual servo data for marker 3 (needed in servo loop)
+        if marker_id == 3:
+            self._last_servo_marker_x = p.x
+            self._last_servo_marker_z = p.z
+            q = msg.pose.orientation
+            _, _, self._last_servo_marker_yaw = tft.euler_from_quaternion(
+                [q.x, q.y, q.z, q.w])
+            self._last_servo_detection_time = time.time()
+            self._last_servo_tag_odom = self._marker_cam_to_odom(p)
+
+            # Compute the dock's true approach direction from the tag's Z-axis.
+            # Tag Z in camera_optical (rotate [0,0,1] by quaternion):
+            qx, qy, qz, qw = q.x, q.y, q.z, q.w
+            z_cam_x = 2.0 * (qx * qz + qy * qw)
+            z_cam_z = 1.0 - 2.0 * (qx * qx + qy * qy)
+            # Transform to base_link (cam_z→base_x, -cam_x→base_y):
+            z_base_x =  z_cam_z
+            z_base_y = -z_cam_x
+            self._last_servo_z_base = (z_base_x, z_base_y)  # approach dir in base_link
+            # Rotate to odom frame using current robot yaw:
+            _, _, ryaw = self._last_odom_pose
+            self._last_servo_dock_yaw = math.atan2(
+                z_base_x * math.sin(ryaw) + z_base_y * math.cos(ryaw),
+                z_base_x * math.cos(ryaw) - z_base_y * math.sin(ryaw)
+            )
+
+        action:    str   = ''
         homing_ox: float = 0.0
         homing_oy: float = 0.0
 
         with self._lock:
-            # ── 1. Marker-3 precision trigger ──────────────────────────────
+            # ── 1. Marker-3 precision → VISUAL_SERVO_DOCK ─────────────────
             if (marker_id == 3
                     and self._state in (DockState.COMMUTING, DockState.LOCAL_SEARCH,
-                                        DockState.VISUAL_HOMING)
+                                        DockState.VISUAL_HOMING, DockState.NAV_TO_STAGING)
                     and dist < self.PROXIMITY_TRIGGER_M):
-                self._state = DockState.BUFFERING_PRECISION
-                self._prec_buf.clear()
-                action = 'precision'
+                self._state = DockState.VISUAL_SERVO_DOCK
+                action = 'servo_dock'
 
-            # ── 2 & 3. Visual homing entry / direct buffering ──────────────
+            # ── 2 & 3. Homing entry / direct buffering ─────────────────────
             elif self._state in (DockState.COMMUTING, DockState.LOCAL_SEARCH):
                 if dist > self.VISUAL_HOMING_CLOSE_M:
                     self._state = DockState.VISUAL_HOMING
@@ -634,7 +793,7 @@ class DockingSupervisor(Node):
                     self._state = DockState.BUFFERING_ROUGH
                     action = 'buffering_direct'
 
-            # ── 4. Visual homing exit ───────────────────────────────────────
+            # ── 4. Homing exit ─────────────────────────────────────────────
             elif self._state == DockState.VISUAL_HOMING:
                 if dist <= self.VISUAL_HOMING_CLOSE_M:
                     self._rough_buf.clear()
@@ -642,29 +801,32 @@ class DockingSupervisor(Node):
                     action = 'homing_exit'
 
         # ── execute outside lock ──────────────────────────────────────────
-        if action == 'precision':
+        if action == 'servo_dock':
             self.get_logger().info(
-                f'Marker-3 at {dist:.2f} m — BUFFERING_PRECISION'
+                f'Marker-3 at {dist:.2f} m — cancelling RPP, VISUAL_SERVO_DOCK'
             )
-            self.log_event('STATE_CHANGE', 'Transitioned to BUFFERING_PRECISION',
+            self.log_event('STATE_CHANGE', 'Transitioned to VISUAL_SERVO_DOCK',
                            f'marker3_dist={dist:.3f}')
-            self._cancel_current_goal()
+            self.in_blind_approach       = False
+            self.blind_start_pose        = None
+            self._servo_approach_yaw     = None   # recompute approach direction for this attempt
+            self._servo_tag_odom_frozen  = None   # refreeze tag odom at first servo tick
+            self._init_servo_debug_csv()          # fresh file for this docking attempt
+            self._cancel_current_goal()           # hand cmd_vel exclusively to servo loop
 
         elif action == 'homing_enter':
             self.get_logger().info(
                 f'Marker {marker_id} at {dist:.2f} m — VISUAL_HOMING '
-                f'(marker odom ≈ {homing_ox:.2f},{homing_oy:.2f})'
+                f'(odom ≈ {homing_ox:.2f},{homing_oy:.2f})'
             )
             self.log_event('STATE_CHANGE', 'Transitioned to VISUAL_HOMING',
-                           f'marker{marker_id}_dist={dist:.3f} '
-                           f'odom=({homing_ox:.2f},{homing_oy:.2f})')
+                           f'marker{marker_id}_dist={dist:.3f}')
             self._cancel_current_goal()
             self._fire_visual_homing_goal(homing_ox, homing_oy)
 
         elif action == 'buffering_direct':
             self.get_logger().info(
-                f'Marker {marker_id} at {dist:.2f} m ≤ {self.VISUAL_HOMING_CLOSE_M:.2f} m '
-                '— BUFFERING_ROUGH (direct, already close)'
+                f'Marker {marker_id} at {dist:.2f} m — BUFFERING_ROUGH (direct)'
             )
             self.log_event('STATE_CHANGE', 'Transitioned to BUFFERING_ROUGH',
                            f'marker{marker_id}_dist={dist:.3f} (direct)')
@@ -672,187 +834,167 @@ class DockingSupervisor(Node):
 
         elif action == 'homing_exit':
             self.get_logger().info(
-                f'Visual homing: marker {marker_id} now at {dist:.2f} m '
-                '— BUFFERING_ROUGH'
+                f'Visual homing: marker {marker_id} now at {dist:.2f} m — BUFFERING_ROUGH'
             )
             self.log_event('STATE_CHANGE', 'Transitioned to BUFFERING_ROUGH',
                            f'marker{marker_id}_dist={dist:.3f} (homing exit)')
             self._cancel_current_goal()
 
-    # ── RViz goal_pose proxy ──────────────────────────────────────────────────
+    # ── mission reset helper ─────────────────────────────────────────────────
+
+    def _reset_mission(self):
+        """Clean reset of all mission state. Safe to call from any state."""
+        self._cancel_current_goal()
+        self._stop_robot()
+
+        with self._lock:
+            prev_state = self._state
+
+        if prev_state not in (DockState.IDLE, DockState.DOCKED, DockState.ABORTED):
+            self._log_mission_end('CANCELLED')
+
+        self.in_blind_approach          = False
+        self.blind_start_pose           = None
+        self.blind_target_dist          = 0.0
+        self._last_servo_detection_time = time.time()
+        self._servo_approach_yaw        = None
+        self._servo_tag_odom_frozen     = None
+        self._reference_dock_pose       = (0.0, 0.0, 0.0)
+
+        with self._lock:
+            self._state               = DockState.IDLE
+            self._rough_buf.clear()
+            self._current_goal_handle = None
+            self._mission_logged      = False
+
+        self.log_event('RESET', 'Mission reset — returned to IDLE')
+        self.get_logger().info(
+            'Mission reset triggered. State returned to IDLE. Variables cleared.'
+        )
+
+    # ── dynamic parameter callback ────────────────────────────────────────────
+
+    def _parameter_callback(self, params):
+        for p in params:
+            if   p.name == 'lookahead_dist':           self.lookahead_dist           = p.value
+            elif p.name == 'k_steer':                  self.k_steer                  = p.value
+            elif p.name == 'friction_deadband':        self.friction_deadband        = p.value
+            elif p.name == 'max_wz':                   self.max_wz                   = p.value
+            elif p.name == 'v_linear':                 self.v_linear                 = p.value
+            elif p.name == 'target_standoff':          self.target_standoff          = p.value
+            elif p.name == 'blind_approach_threshold': self.blind_approach_threshold = p.value
+            else:
+                continue
+            self.get_logger().info(f'[PARAM] {p.name} → {p.value}')
+        return SetParametersResult(successful=True)
+
+    # ── RViz goal proxy ───────────────────────────────────────────────────────
 
     def _on_goal_pose(self, msg: PoseStamped):
-        """Intercepts RViz 2D Nav Goal.
+        with self._lock:
+            state = self._state
 
-        IDLE      → transition to COMMUTING, send zone nav goal (normal start).
-        COMMUTING → preempt current zone drive, re-target to new clicked point.
-        All else  → ignore (active docking or terminal state).
-        """
+        # Auto-reset from terminal states so new goals are never ignored
+        if state in (DockState.DOCKED, DockState.ABORTED):
+            self.get_logger().info(
+                f'New goal received in {state.name} — auto-resetting mission'
+            )
+            self._reset_mission()  # sets state → IDLE, _mission_logged → False
+
         with self._lock:
             state = self._state
             if state == DockState.IDLE:
                 self._state = DockState.COMMUTING
                 self._rough_buf.clear()
-                self._prec_buf.clear()
                 do_cancel = False
             elif state == DockState.COMMUTING:
                 self._rough_buf.clear()
-                self._prec_buf.clear()
                 do_cancel = True
             else:
-                self.get_logger().info(
-                    f'/goal_pose ignored — state is {state.name}'
-                )
+                self.get_logger().info(f'/goal_pose ignored — state is {state.name}')
                 return
 
         if do_cancel:
             self._cancel_current_goal()
             self.get_logger().info(
-                f'New /goal_pose — re-targeting zone '
-                f'({msg.pose.position.x:.2f}, {msg.pose.position.y:.2f})'
+                f'New /goal_pose — re-targeting '
+                f'({msg.pose.position.x:.2f},{msg.pose.position.y:.2f})'
             )
         else:
-            # Fresh run starting from IDLE
             self._mission_logged = False
             self._run_start_time = time.time()
             self.get_logger().info(
-                f'IDLE → COMMUTING — navigating to zone '
-                f'({msg.pose.position.x:.2f}, {msg.pose.position.y:.2f}); '
-                'spiral triggers on arrival if no tag detected'
+                f'IDLE → COMMUTING — zone '
+                f'({msg.pose.position.x:.2f},{msg.pose.position.y:.2f})'
             )
 
-        self.log_event(
-            'GOAL_POSE', 'RViz zone goal received',
-            f'({msg.pose.position.x:.2f},{msg.pose.position.y:.2f})',
-        )
-
-        self._set_speed_limit(1.0)   # ensure full speed during zone commute
-        msg.header.stamp = self.get_clock().now().to_msg()
+        self.log_event('GOAL_POSE', 'RViz zone goal received',
+                       f'({msg.pose.position.x:.2f},{msg.pose.position.y:.2f})')
+        msg.header.stamp = rclpy.time.Time().to_msg()
         self._send_nav_goal(msg, self._zone_nav_done_cb)
 
-    # ── odom callback — overshoot kill-switch ────────────────────────────────
+    # ── odom ──────────────────────────────────────────────────────────────────
 
     def _on_odom(self, msg: Odometry):
-        px = msg.pose.pose.position.x
-        py = msg.pose.pose.position.y
         q  = msg.pose.pose.orientation
         _, _, yaw = tft.euler_from_quaternion([q.x, q.y, q.z, q.w])
-
-        # Always record last known pose (used for final combined error)
-        self._last_odom_pose = (px, py, yaw)
-
-        # Overshoot monitor is only active during final dock approach
-        with self._lock:
-            if self._state != DockState.NAV_TO_DOCK:
-                return
-            gx, gy, _ = self._reference_dock_pose
-
-        current_dist = math.sqrt((px - gx)**2 + (py - gy)**2)
-
-        should_abort = False
-        abort_reason = ''
-        with self._lock:
-            if self._state != DockState.NAV_TO_DOCK:
-                return
-
-            # Arm only when robot enters the 10 cm danger zone
-            if current_dist <= self.OVERSHOOT_ARM_M:
-                self.min_distance_to_goal = min(self.min_distance_to_goal, current_dist)
-
-            # Trigger: armed AND robot is retreating more than 2 cm from its closest point
-            if (self.min_distance_to_goal <= self.OVERSHOOT_ARM_M
-                    and current_dist > self.min_distance_to_goal + self.OVERSHOOT_DELTA_M):
-                self._state   = DockState.ABORTED
-                should_abort  = True
-                abort_reason  = (
-                    f'Goal overshoot detected inside danger zone. '
-                    f'Min dist: {self.min_distance_to_goal:.3f}, '
-                    f'Current: {current_dist:.3f}'
-                )
-
-        if should_abort:
-            self.get_logger().error(f'Overshoot kill-switch: {abort_reason}')
-            self.log_event('SAFETY_ABORT', abort_reason)
-            self._stop_robot()
-            self._cancel_current_goal()
-            self._restore_commute_config()
-            self._set_speed_limit(1.0)
-            self._log_mission_end('ABORTED_OVERSHOOT')
+        self._last_odom_pose = (
+            msg.pose.pose.position.x,
+            msg.pose.pose.position.y,
+            yaw,
+        )
 
     # ── visual homing ─────────────────────────────────────────────────────────
 
     def _fire_visual_homing_goal(self, ox: float, oy: float):
-        """Navigate toward the AprilTag marker's odom position (ox, oy).
+        """Send RPP nav goal toward the marker's odom position.
 
-        The nav goal is placed VISUAL_HOMING_NAV_STANDOFF_M short of the marker
-        so it stays in free space.  _on_any_marker cancels this goal early once
-        the camera-frame distance drops to VISUAL_HOMING_CLOSE_M — the nav goal
-        just gives Nav2 a heading to follow.
+        Standoff is inside the VISUAL_HOMING_CLOSE_M camera trigger, so
+        _on_any_marker will cancel this goal and enter BUFFERING_ROUGH before
+        the robot physically arrives at the nav standoff.
         """
         rx, ry, _ = self._last_odom_pose
         approach_angle = math.atan2(oy - ry, ox - rx)
 
         hx   = ox - self.VISUAL_HOMING_NAV_STANDOFF_M * math.cos(approach_angle)
         hy   = oy - self.VISUAL_HOMING_NAV_STANDOFF_M * math.sin(approach_angle)
-        hyaw = approach_angle   # face the marker
+        hyaw = approach_angle
 
         goal_pose = _pose_stamped(hx, hy, hyaw, 'odom')
-        goal_pose.header.stamp = self.get_clock().now().to_msg()
-
         self.get_logger().info(
-            f'Visual homing nav → ({hx:.3f}, {hy:.3f}) yaw={math.degrees(hyaw):.1f}°  '
+            f'Visual homing nav → ({hx:.3f},{hy:.3f}) yaw={math.degrees(hyaw):.1f}°  '
             f'marker_odom=({ox:.3f},{oy:.3f})'
         )
-        self.log_event(
-            'GOAL_SENT', 'Visual homing nav goal sent',
-            f'standoff=({hx:.3f},{hy:.3f}) approach_deg={math.degrees(approach_angle):.1f}',
-        )
-        self._set_speed_limit(1.0)
+        self.log_event('GOAL_SENT', 'Visual homing nav goal sent',
+                       f'standoff=({hx:.3f},{hy:.3f})')
         self._send_nav_goal(goal_pose, self._visual_homing_done_cb)
 
     def _visual_homing_done_cb(self, future):
-        """Fires when the visual-homing nav goal finishes.
-
-        Success → robot is at the close-range standoff; start BUFFERING_ROUGH.
-        Failure → fall back to LOCAL_SEARCH spiral (box was detected, so we
-                  know roughly where it is; the spiral will re-find it).
-        """
         result = future.result()
         status = result.status if result else GoalStatus.STATUS_ABORTED
 
         with self._lock:
             state = self._state
 
-        # Already transitioned out by _on_box_pose close-enough check
-        # or by the precision trigger — nothing to do.
         if state != DockState.VISUAL_HOMING:
-            return
+            return  # already transitioned by _on_any_marker — nothing to do
 
         if status == GoalStatus.STATUS_SUCCEEDED:
-            self.get_logger().info(
-                'Visual homing goal reached — starting BUFFERING_ROUGH from close range'
-            )
-            self.log_event(
-                'STATE_CHANGE', 'Transitioned to BUFFERING_ROUGH',
-                'visual homing nav goal succeeded',
-            )
+            self.get_logger().info('Visual homing goal reached — BUFFERING_ROUGH')
+            self.log_event('STATE_CHANGE', 'Transitioned to BUFFERING_ROUGH',
+                           'visual homing nav succeeded')
             with self._lock:
                 self._state = DockState.BUFFERING_ROUGH
                 self._rough_buf.clear()
-            # Buffer will be filled by the next _on_box_pose callbacks
         else:
             self.get_logger().warn(
-                f'Visual homing failed (status={status}) — starting LOCAL_SEARCH spiral'
-            )
-            self.log_event(
-                'STATE_CHANGE', 'Transitioned to LOCAL_SEARCH',
-                f'visual homing failed status={status}',
+                f'Visual homing failed (status={status}) — falling back to LOCAL_SEARCH'
             )
             with self._lock:
                 self._state = DockState.LOCAL_SEARCH
             self._fire_local_search()
 
-    # ── goal firing ───────────────────────────────────────────────────────────
+    # ── staging ───────────────────────────────────────────────────────────────
 
     def _fire_staging_goal(self, buf: list[tuple[float, float, float]]):
         xs   = [p[0] for p in buf]
@@ -867,51 +1009,47 @@ class DockingSupervisor(Node):
         sy   = avg_y - self.APPROACH_DIST_ROUGH * math.sin(avg_yaw)
         syaw = avg_yaw
 
-        goal_pose = _pose_stamped(sx, sy, syaw, 'odom')
-        goal_pose.header.stamp = self.get_clock().now().to_msg()
-
-        self.get_logger().info(
-            f'Staging → ({sx:.3f}, {sy:.3f}) yaw={math.degrees(syaw):.1f}°'
-        )
-        self.log_event(
-            'STATE_CHANGE', 'Transitioned to NAV_TO_STAGING',
-            f'goal=({sx:.3f},{sy:.3f}) yaw={math.degrees(syaw):.1f}deg',
-        )
-        self._set_speed_limit(1.0)
-        self._send_nav_goal(goal_pose, self._staging_done_cb)
-
-    def _fire_dock_goal(self, buf: list[tuple[float, float, float]]):
-        xs   = [p[0] for p in buf]
-        ys   = [p[1] for p in buf]
-        yaws = [p[2] for p in buf]
-
-        avg_x   = _outlier_mean(xs)
-        avg_y   = _outlier_mean(ys)
-        avg_yaw = _circular_mean(yaws)
-
         with self._lock:
             self._reference_dock_pose = (avg_x, avg_y, avg_yaw)
-            self.min_distance_to_goal = float('inf')  # reset watermark for fresh approach
 
-        goal_pose = _pose_stamped(avg_x, avg_y, avg_yaw, 'odom')
-        goal_pose.header.stamp = self.get_clock().now().to_msg()
-
+        goal_pose = _pose_stamped(sx, sy, syaw, 'odom')
         self.get_logger().info(
-            f'Dock → ({avg_x:.3f}, {avg_y:.3f}) yaw={math.degrees(avg_yaw):.1f}°'
+            f'Staging → ({sx:.3f},{sy:.3f}) yaw={math.degrees(syaw):.1f}°'
         )
-        self.log_event(
-            'STATE_CHANGE', 'Transitioned to NAV_TO_DOCK',
-            f'goal=({avg_x:.3f},{avg_y:.3f}) yaw={math.degrees(avg_yaw):.1f}deg',
-        )
-        self._set_speed_limit(self.DOCK_SPEED_LIMIT)
-        self._configure_precision_approach()   # footprint + inflation + velocity (blocking)
-        self._send_nav_goal(goal_pose, self._dock_done_cb)
+        self.log_event('STATE_CHANGE', 'Transitioned to NAV_TO_STAGING',
+                       f'goal=({sx:.3f},{sy:.3f}) yaw={math.degrees(syaw):.1f}deg')
+        self._send_nav_goal(goal_pose, self._staging_done_cb)
 
-    # ── Nav2 NavigateToPose helpers ───────────────────────────────────────────
+    def _staging_done_cb(self, future):
+        result = future.result()
+        status = result.status if result else GoalStatus.STATUS_ABORTED
+
+        with self._lock:
+            state = self._state
+
+        if state == DockState.VISUAL_SERVO_DOCK:
+            return  # precision trigger fired en route — already in servo mode
+
+        if status != GoalStatus.STATUS_SUCCEEDED:
+            self.get_logger().warn(f'Staging failed (status={status}) — IDLE')
+            self.log_event('STATE_CHANGE', 'Transitioned to IDLE',
+                           f'staging_failed status={status}')
+            with self._lock:
+                self._state = DockState.IDLE
+        else:
+            self.get_logger().info('Staging reached — entering visual servo')
+            self.log_event('STATE_CHANGE', 'Transitioned to VISUAL_SERVO_DOCK',
+                           'staging_done_cb handoff')
+            self.in_blind_approach = False
+            self.blind_start_pose  = None
+            with self._lock:
+                self._state = DockState.VISUAL_SERVO_DOCK
+
+    # ── Nav2 action helpers ───────────────────────────────────────────────────
 
     def _send_nav_goal(self, pose: PoseStamped, done_cb):
         if not self._nav_client.wait_for_server(timeout_sec=5.0):
-            self.get_logger().error('Nav2 action server not available — back to IDLE')
+            self.get_logger().error('Nav2 action server not available — IDLE')
             self.log_event('ERROR', 'Nav2 action server unavailable')
             with self._lock:
                 self._state = DockState.IDLE
@@ -919,20 +1057,18 @@ class DockingSupervisor(Node):
 
         goal = NavigateToPose.Goal()
         goal.pose = pose
-
         future = self._nav_client.send_goal_async(goal)
         future.add_done_callback(lambda f: self._goal_accepted_cb(f, done_cb))
 
     def _goal_accepted_cb(self, future, done_cb):
         handle = future.result()
         if not handle or not handle.accepted:
-            self.get_logger().error('Nav2 rejected goal — back to IDLE')
+            self.get_logger().error('Nav2 rejected goal — IDLE')
             self.log_event('ERROR', 'Nav2 goal rejected')
             with self._lock:
                 self._state = DockState.IDLE
             return
-
-        self.log_event('GOAL_ACCEPTED', 'Nav2 goal accepted and tracking started')
+        self.log_event('GOAL_ACCEPTED', 'Nav2 goal accepted')
         with self._lock:
             self._current_goal_handle = handle
         handle.get_result_async().add_done_callback(done_cb)
@@ -942,254 +1078,6 @@ class DockingSupervisor(Node):
             handle = self._current_goal_handle
         if handle is not None:
             handle.cancel_goal_async()
-
-    def _staging_done_cb(self, future):
-        result = future.result()
-        status = result.status if result else GoalStatus.STATUS_ABORTED
-
-        with self._lock:
-            state = self._state
-
-        if state == DockState.BUFFERING_PRECISION:
-            return  # intentionally cancelled by marker-3 proximity trigger
-
-        if status != GoalStatus.STATUS_SUCCEEDED:
-            self.get_logger().warn(f'Staging failed (status={status}) — IDLE')
-            self.log_event(
-                'STATE_CHANGE', 'Transitioned to IDLE',
-                f'staging_failed status={status}',
-            )
-            with self._lock:
-                self._state = DockState.IDLE
-        else:
-            # Robot is stationary at staging — if marker 3 is already visible,
-            # the proximity trigger will never fire on its own. Auto-proceed.
-            now_ns = self.get_clock().now().nanoseconds
-            m3 = self._marker_seen.get(3)
-            if m3 and (now_ns - m3[0]) / 1e9 <= 2.0:
-                with self._lock:
-                    if self._state == DockState.NAV_TO_STAGING:
-                        self._state = DockState.BUFFERING_PRECISION
-                        self._prec_buf.clear()
-                self.get_logger().info(
-                    f'Staging reached — Marker 3 visible at {m3[1]:.2f} m, '
-                    'auto-triggering BUFFERING_PRECISION'
-                )
-                self.log_event(
-                    'STATE_CHANGE', 'Transitioned to BUFFERING_PRECISION',
-                    f'auto-triggered on staging arrival, marker3_dist={m3[1]:.3f}',
-                )
-            else:
-                self.get_logger().info('Staging reached — awaiting marker-3 close trigger')
-
-    def _dock_done_cb(self, future):
-        result = future.result()
-        status = result.status if result else GoalStatus.STATUS_ABORTED
-
-        with self._lock:
-            state = self._state
-
-        if state == DockState.ABORTED:
-            return  # overshoot kill-switch already handled this
-
-        if status == GoalStatus.STATUS_SUCCEEDED:
-            rx, ry, ryaw = self._last_odom_pose
-            gx, gy, gyaw = self._reference_dock_pose
-            dx   = rx - gx
-            dy   = ry - gy
-            dyaw = _wrap_pi(ryaw - gyaw)
-            L    = 0.20
-            combined_error = math.sqrt(dx**2 + dy**2 + (L * dyaw)**2)
-
-            self.log_event(
-                'MISSION_SUCCESS', 'Final Combined Error',
-                f'{combined_error:.6f}',
-            )
-            with self._lock:
-                self._state = DockState.LOCKED
-            self._stop_robot()
-            self.get_logger().info(
-                f'DOCKED — state LOCKED  combined_error={combined_error:.4f} m'
-            )
-            self._log_mission_end('SUCCEEDED')
-        else:
-            self.get_logger().warn(f'Dock failed (status={status}) — IDLE')
-            self.log_event(
-                'STATE_CHANGE', 'Transitioned to IDLE',
-                f'dock_failed status={status}',
-            )
-            self._restore_commute_config()
-            self._set_speed_limit(1.0)
-            with self._lock:
-                self._state = DockState.IDLE
-            self._log_mission_end('FAILED_NAV2')
-
-    # ── speed / footprint helpers ─────────────────────────────────────────────
-
-    def _set_speed_limit(self, speed: float):
-        msg = SpeedLimit()
-        msg.percentage  = False
-        msg.speed_limit = speed
-        self._speed_pub.publish(msg)
-
-    def _configure_precision_approach(self):
-        """Set 10×10 cm footprint, tight inflation, and slow velocity before NAV_TO_DOCK.
-
-        Blocks until each service call completes (or times out). Safe to call
-        from cb_sub (ReentrantCallbackGroup) — service responses are dispatched
-        through cb_srv which is a different group, so no deadlock.
-        """
-        def _wait(future, label: str, timeout: float = 3.0):
-            deadline = time.time() + timeout
-            while not future.done():
-                if time.time() > deadline:
-                    self.get_logger().warn(f'{label} timed out — continuing anyway')
-                    return
-                time.sleep(0.01)
-
-        def _fp_req(fp_str: str) -> SetParameters.Request:
-            pv = ParameterValue()
-            pv.type         = ParameterType.PARAMETER_STRING
-            pv.string_value = fp_str
-            p = Parameter()
-            p.name  = 'footprint'
-            p.value = pv
-            req = SetParameters.Request()
-            req.parameters = [p]
-            return req
-
-        def _inflation_req(radius: float, scale: float) -> SetParameters.Request:
-            req = SetParameters.Request()
-            for name, val in [
-                ('inflation_layer.inflation_radius',    radius),
-                ('inflation_layer.cost_scaling_factor', scale),
-            ]:
-                pv = ParameterValue()
-                pv.type         = ParameterType.PARAMETER_DOUBLE
-                pv.double_value = val
-                p = Parameter()
-                p.name = name; p.value = pv
-                req.parameters.append(p)
-            return req
-
-        def _velocity_req(max_vel: list) -> SetParameters.Request:
-            pv = ParameterValue()
-            pv.type              = ParameterType.PARAMETER_DOUBLE_ARRAY
-            pv.double_array_value = max_vel
-            p = Parameter()
-            p.name = 'max_velocity'; p.value = pv
-            req = SetParameters.Request()
-            req.parameters = [p]
-            return req
-
-        # 1. Footprint 10×10 cm on both costmaps
-        for client, label in [
-            (self._fp_client,        'local_costmap/footprint'),
-            (self._fp_global_client, 'global_costmap/footprint'),
-        ]:
-            if client.wait_for_service(timeout_sec=2.0):
-                _wait(client.call_async(_fp_req(self._FP_DOCK)), label)
-            else:
-                self.get_logger().warn(f'{label} unavailable — skipping')
-
-        self.get_logger().info('Precision footprint set: 10×10 cm')
-
-        # 2. Inflation 0.11 m / 100.0 on local costmap
-        if self._fp_client.wait_for_service(timeout_sec=2.0):
-            _wait(
-                self._fp_client.call_async(
-                    _inflation_req(self.INFLATION_RADIUS_PRECISION,
-                                   self.INFLATION_SCALE_PRECISION)
-                ),
-                'local_costmap/inflation',
-            )
-            self.get_logger().info(
-                f'Precision inflation set: radius={self.INFLATION_RADIUS_PRECISION} m, '
-                f'scale={self.INFLATION_SCALE_PRECISION}'
-            )
-
-        # 3. Velocity smoother cap 0.2 m/s
-        if self._velocity_smoother_client.wait_for_service(timeout_sec=2.0):
-            _wait(
-                self._velocity_smoother_client.call_async(
-                    _velocity_req([0.2, 0.0, 5.0])
-                ),
-                'velocity_smoother/max_velocity',
-            )
-            self.get_logger().info('Velocity smoother capped at 0.2 m/s')
-        else:
-            self.get_logger().warn('velocity_smoother/set_parameters unavailable — skipping')
-
-        # 4. Flush local costmap
-        if self._clear_local_client.wait_for_service(timeout_sec=2.0):
-            _wait(
-                self._clear_local_client.call_async(Empty.Request()),
-                'clear_local_costmap',
-            )
-            self.get_logger().info('Local costmap flushed — transitioning to NAV_TO_DOCK')
-
-    def _restore_commute_config(self):
-        """Restore footprint, inflation, and velocity to normal commute values.
-
-        Always fire-and-forget (no blocking waits). Safe to call from cb_srv
-        (_on_reset) where blocking would deadlock, and from cb_sub / cb_nav
-        where we simply don't need to wait.
-        """
-        def _fp_req(fp_str: str) -> SetParameters.Request:
-            pv = ParameterValue()
-            pv.type         = ParameterType.PARAMETER_STRING
-            pv.string_value = fp_str
-            p = Parameter()
-            p.name = 'footprint'; p.value = pv
-            req = SetParameters.Request()
-            req.parameters = [p]
-            return req
-
-        def _inflation_req(radius: float, scale: float) -> SetParameters.Request:
-            req = SetParameters.Request()
-            for name, val in [
-                ('inflation_layer.inflation_radius',    radius),
-                ('inflation_layer.cost_scaling_factor', scale),
-            ]:
-                pv = ParameterValue()
-                pv.type         = ParameterType.PARAMETER_DOUBLE
-                pv.double_value = val
-                p = Parameter()
-                p.name = name; p.value = pv
-                req.parameters.append(p)
-            return req
-
-        def _velocity_req(max_vel: list) -> SetParameters.Request:
-            pv = ParameterValue()
-            pv.type               = ParameterType.PARAMETER_DOUBLE_ARRAY
-            pv.double_array_value = max_vel
-            p = Parameter()
-            p.name = 'max_velocity'; p.value = pv
-            req = SetParameters.Request()
-            req.parameters = [p]
-            return req
-
-        fp_r = _fp_req(self._FP_NORMAL)
-        inf_r = _inflation_req(self.INFLATION_RADIUS_NORMAL, self.INFLATION_SCALE_NORMAL)
-        vel_r = _velocity_req([0.5, 0.0, 5.0])
-
-        if self._fp_client.service_is_ready():
-            self._fp_client.call_async(fp_r)
-        if self._fp_global_client.service_is_ready():
-            self._fp_global_client.call_async(_fp_req(self._FP_NORMAL))
-        if self._fp_client.service_is_ready():
-            self._fp_client.call_async(inf_r)
-        if self._velocity_smoother_client.service_is_ready():
-            self._velocity_smoother_client.call_async(vel_r)
-        if self._clear_local_client.service_is_ready():
-            self._clear_local_client.call_async(Empty.Request())
-        if self._clear_global_client.service_is_ready():
-            self._clear_global_client.call_async(Empty.Request())
-
-        self.get_logger().info(
-            f'Commute config restored: footprint={self._FP_NORMAL}, '
-            f'inflation={self.INFLATION_RADIUS_NORMAL} m, velocity_smoother=0.5 m/s'
-        )
 
     def _stop_robot(self):
         self._cmd_pub.publish(Twist())
@@ -1205,23 +1093,22 @@ class DockingSupervisor(Node):
 
         self._cancel_current_goal()
         self._stop_robot()
-        self._restore_commute_config()   # fire-and-forget: footprint + inflation + velocity
-        self._set_speed_limit(1.0)
 
-        # Log mission end based on what state we were in before reset
-        if pre_reset_state == DockState.LOCKED:
-            self._log_mission_end('SUCCEEDED')
+        if pre_reset_state == DockState.DOCKED:
+            self._log_mission_end('SUCCESS')
         elif pre_reset_state == DockState.ABORTED:
-            self._log_mission_end('ABORTED')
+            self._log_mission_end('ABORT')
         elif pre_reset_state not in (DockState.IDLE,):
             self._log_mission_end('CANCELLED')
 
+        self.in_blind_approach = False
+        self.blind_start_pose  = None
+        self.blind_target_dist = 0.0
         with self._lock:
-            self._state               = DockState.IDLE
+            self._state = DockState.IDLE
             self._rough_buf.clear()
-            self._prec_buf.clear()
-            self.min_distance_to_goal = float('inf')
             self._current_goal_handle = None
+
         self.log_event('STATE_CHANGE', 'Transitioned to IDLE', 'via reset')
         resp.success = True
         resp.message = 'Reset to IDLE'

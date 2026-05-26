@@ -1,0 +1,27 @@
+timestamp_iso,event_type,description,value
+2026-05-26T02:35:20.339631,NODE_START,DockingSupervisor (RPP + Visual Servo) initialised,
+2026-05-26T02:36:07.564907,GOAL_POSE,RViz zone goal received,"(0.31,0.01)"
+2026-05-26T02:36:07.571317,GOAL_ACCEPTED,Nav2 goal accepted,
+2026-05-26T02:36:07.799338,STATE_CHANGE,Transitioned to VISUAL_SERVO_DOCK,marker3_dist=0.561
+2026-05-26T02:36:12.840852,SAFETY_ABORT,Visual servo: marker lost >2 s,
+2026-05-26T02:36:53.778200,RESET,Mission reset — returned to IDLE,
+2026-05-26T02:36:53.790232,GOAL_POSE,RViz zone goal received,"(0.29,-0.14)"
+2026-05-26T02:36:53.799272,GOAL_ACCEPTED,Nav2 goal accepted,
+2026-05-26T02:36:53.803959,STATE_CHANGE,Transitioned to VISUAL_SERVO_DOCK,marker3_dist=0.563
+2026-05-26T02:36:57.444142,SAFETY_ABORT,Visual servo: marker lost >2 s,
+2026-05-26T02:37:30.131705,RESET,Mission reset — returned to IDLE,
+2026-05-26T02:37:30.140914,GOAL_POSE,RViz zone goal received,"(-0.06,-0.09)"
+2026-05-26T02:37:30.148280,GOAL_ACCEPTED,Nav2 goal accepted,
+2026-05-26T02:37:30.192841,STATE_CHANGE,Transitioned to VISUAL_SERVO_DOCK,marker3_dist=0.619
+2026-05-26T02:37:35.539845,SAFETY_ABORT,Visual servo: marker lost >2 s,
+2026-05-26T02:39:36.162004,RESET,Mission reset — returned to IDLE,
+2026-05-26T02:39:36.165358,GOAL_POSE,RViz zone goal received,"(0.27,-0.48)"
+2026-05-26T02:39:36.173323,GOAL_ACCEPTED,Nav2 goal accepted,
+2026-05-26T02:39:36.365779,STATE_CHANGE,Transitioned to VISUAL_SERVO_DOCK,marker3_dist=0.556
+2026-05-26T02:39:40.740923,SAFETY_ABORT,Visual servo: marker lost >2 s,
+2026-05-26T02:40:37.833908,RESET,Mission reset — returned to IDLE,
+2026-05-26T02:40:37.845687,GOAL_POSE,RViz zone goal received,"(1.47,-0.81)"
+2026-05-26T02:40:37.860749,GOAL_ACCEPTED,Nav2 goal accepted,
+2026-05-26T02:40:37.866618,STATE_CHANGE,Transitioned to VISUAL_SERVO_DOCK,marker3_dist=0.533
+2026-05-26T02:40:40.443169,BLIND_APPROACH,Handoff to dead-reckoning,marker_z=0.196 target=0.096
+2026-05-26T02:40:41.146845,MISSION_SUCCESS,Blind approach: standoff reached,traveled=0.107 target=0.096

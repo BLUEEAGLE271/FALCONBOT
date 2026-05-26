@@ -1,0 +1,21 @@
+timestamp_iso,event_type,description,value
+2026-05-25T21:36:20.571122,NODE_START,DockingSupervisor (RPP + Visual Servo) initialised,
+2026-05-25T21:37:06.217396,RESET,Mission reset triggered by service call,
+2026-05-25T21:37:06.217871,STATE_CHANGE,Transitioned to IDLE,via reset
+2026-05-25T21:37:56.109209,GOAL_POSE,RViz zone goal received,"(1.64,0.32)"
+2026-05-25T21:37:56.114746,GOAL_ACCEPTED,Nav2 goal accepted,
+2026-05-25T21:37:56.141913,STATE_CHANGE,Transitioned to VISUAL_HOMING,marker2_dist=1.547
+2026-05-25T21:37:56.145896,GOAL_SENT,Visual homing nav goal sent,"standoff=(2.138,-0.392)"
+2026-05-25T21:37:56.163229,GOAL_ACCEPTED,Nav2 goal accepted,
+2026-05-25T21:38:17.410871,STATE_CHANGE,Transitioned to BUFFERING_ROUGH,visual homing nav succeeded
+2026-05-25T21:38:31.723702,RESET,Mission reset triggered by service call,
+2026-05-25T21:38:31.729594,STATE_CHANGE,Transitioned to IDLE,via reset
+2026-05-25T21:38:53.311357,GOAL_POSE,RViz zone goal received,"(2.02,1.61)"
+2026-05-25T21:38:53.315614,GOAL_ACCEPTED,Nav2 goal accepted,
+2026-05-25T21:38:57.383225,STATE_CHANGE,Transitioned to VISUAL_HOMING,marker3_dist=1.375
+2026-05-25T21:38:57.397704,GOAL_SENT,Visual homing nav goal sent,"standoff=(2.886,-0.390)"
+2026-05-25T21:38:57.408285,GOAL_ACCEPTED,Nav2 goal accepted,
+2026-05-25T21:39:00.408981,STATE_CHANGE,Transitioned to VISUAL_SERVO_DOCK,marker3_dist=0.849
+2026-05-25T21:39:04.165188,SAFETY_ABORT,Visual servo: marker lost >2 s,
+2026-05-25T21:41:58.214317,RESET,Mission reset triggered by service call,
+2026-05-25T21:41:58.215174,STATE_CHANGE,Transitioned to IDLE,via reset

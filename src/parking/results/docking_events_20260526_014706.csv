@@ -1,0 +1,56 @@
+timestamp_iso,event_type,description,value
+2026-05-26T01:47:06.519761,NODE_START,DockingSupervisor (RPP + Visual Servo) initialised,
+2026-05-26T01:48:11.310861,GOAL_POSE,RViz zone goal received,"(0.39,-0.03)"
+2026-05-26T01:48:11.318933,GOAL_ACCEPTED,Nav2 goal accepted,
+2026-05-26T01:48:11.334578,STATE_CHANGE,Transitioned to VISUAL_SERVO_DOCK,marker3_dist=0.597
+2026-05-26T01:48:21.123887,BLIND_APPROACH,Handoff to dead-reckoning,marker_z=0.133 target=0.083
+2026-05-26T01:48:22.919652,MISSION_SUCCESS,Blind approach: standoff reached,traveled=0.085 target=0.083
+2026-05-26T01:49:43.717108,RESET,Mission reset — returned to IDLE,
+2026-05-26T01:49:43.725081,GOAL_POSE,RViz zone goal received,"(0.09,-0.13)"
+2026-05-26T01:49:43.730725,GOAL_ACCEPTED,Nav2 goal accepted,
+2026-05-26T01:49:43.792339,STATE_CHANGE,Transitioned to VISUAL_SERVO_DOCK,marker3_dist=0.557
+2026-05-26T01:49:51.419346,BLIND_APPROACH,Handoff to dead-reckoning,marker_z=0.172 target=0.122
+2026-05-26T01:49:54.219711,MISSION_SUCCESS,Blind approach: standoff reached,traveled=0.126 target=0.122
+2026-05-26T01:51:36.049642,RESET,Mission reset — returned to IDLE,
+2026-05-26T01:51:36.062249,GOAL_POSE,RViz zone goal received,"(-0.23,-0.19)"
+2026-05-26T01:51:36.067523,GOAL_ACCEPTED,Nav2 goal accepted,
+2026-05-26T01:51:36.083908,STATE_CHANGE,Transitioned to VISUAL_SERVO_DOCK,marker3_dist=0.558
+2026-05-26T01:51:44.919598,SAFETY_ABORT,Visual servo: marker lost >2 s,
+2026-05-26T01:52:09.240228,RESET,Mission reset — returned to IDLE,
+2026-05-26T01:52:09.249849,GOAL_POSE,RViz zone goal received,"(-0.14,-0.22)"
+2026-05-26T01:52:09.265146,GOAL_ACCEPTED,Nav2 goal accepted,
+2026-05-26T01:52:09.268584,STATE_CHANGE,Transitioned to VISUAL_SERVO_DOCK,marker3_dist=0.542
+2026-05-26T01:52:17.530375,BLIND_APPROACH,Handoff to dead-reckoning,marker_z=0.183 target=0.133
+2026-05-26T01:52:20.121719,MISSION_SUCCESS,Blind approach: standoff reached,traveled=0.136 target=0.133
+2026-05-26T01:55:46.014296,RESET,Mission reset — returned to IDLE,
+2026-05-26T01:55:46.021226,GOAL_POSE,RViz zone goal received,"(-0.20,-0.24)"
+2026-05-26T01:55:46.043481,GOAL_ACCEPTED,Nav2 goal accepted,
+2026-05-26T01:55:46.054316,STATE_CHANGE,Transitioned to VISUAL_SERVO_DOCK,marker3_dist=0.623
+2026-05-26T01:55:51.022809,SAFETY_ABORT,Visual servo: marker lost >2 s,
+2026-05-26T01:56:26.264558,RESET,Mission reset — returned to IDLE,
+2026-05-26T01:56:26.268962,GOAL_POSE,RViz zone goal received,"(-0.18,-0.23)"
+2026-05-26T01:56:26.273464,GOAL_ACCEPTED,Nav2 goal accepted,
+2026-05-26T01:56:26.356824,STATE_CHANGE,Transitioned to VISUAL_SERVO_DOCK,marker3_dist=0.579
+2026-05-26T01:56:29.419038,BLIND_APPROACH,Handoff to dead-reckoning,marker_z=0.191 target=0.091
+2026-05-26T01:56:30.127602,MISSION_SUCCESS,Blind approach: standoff reached,traveled=0.105 target=0.091
+2026-05-26T01:57:16.289624,RESET,Mission reset — returned to IDLE,
+2026-05-26T01:57:16.297479,GOAL_POSE,RViz zone goal received,"(-0.14,-0.21)"
+2026-05-26T01:57:16.301455,GOAL_ACCEPTED,Nav2 goal accepted,
+2026-05-26T01:57:19.443643,GOAL_POSE,RViz zone goal received,"(-0.14,-0.23)"
+2026-05-26T01:57:19.447965,GOAL_ACCEPTED,Nav2 goal accepted,
+2026-05-26T01:57:23.120279,GOAL_POSE,RViz zone goal received,"(-0.23,-0.31)"
+2026-05-26T01:57:23.129659,GOAL_ACCEPTED,Nav2 goal accepted,
+2026-05-26T01:57:36.539180,GOAL_POSE,RViz zone goal received,"(-0.27,-0.33)"
+2026-05-26T01:57:36.546461,GOAL_ACCEPTED,Nav2 goal accepted,
+2026-05-26T01:57:46.068376,RESET,Mission reset triggered by service call,
+2026-05-26T01:57:46.070338,STATE_CHANGE,Transitioned to IDLE,via reset
+2026-05-26T01:57:52.399907,GOAL_POSE,RViz zone goal received,"(-0.12,-0.26)"
+2026-05-26T01:57:52.407177,GOAL_ACCEPTED,Nav2 goal accepted,
+2026-05-26T01:57:54.628020,STATE_CHANGE,Transitioned to VISUAL_SERVO_DOCK,marker3_dist=0.559
+2026-05-26T01:57:59.022479,SAFETY_ABORT,Visual servo: marker lost >2 s,
+2026-05-26T01:58:32.187589,RESET,Mission reset triggered by service call,
+2026-05-26T01:58:32.188277,STATE_CHANGE,Transitioned to IDLE,via reset
+2026-05-26T01:58:36.518466,GOAL_POSE,RViz zone goal received,"(-0.24,-0.24)"
+2026-05-26T01:58:36.532069,GOAL_ACCEPTED,Nav2 goal accepted,
+2026-05-26T01:58:39.373035,STATE_CHANGE,Transitioned to VISUAL_SERVO_DOCK,marker3_dist=0.481
+2026-05-26T01:58:44.622451,SAFETY_ABORT,Visual servo: marker lost >2 s,

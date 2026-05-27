@@ -1,3 +1,0 @@
-elapsed_s,timestamp_iso,state,cpu_pct,ram_pct,gpu_pct,cmd_vel_x,cmd_vel_z
-0.61,2026-05-25T20:13:28.461252,IDLE,54.1,59.1,0.0,0.0000,0.0000
-1.11,2026-05-25T20:13:28.961451,IDLE,46.0,59.1,0.0,0.0000,0.0000

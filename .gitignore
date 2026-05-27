@@ -2,3 +2,14 @@ build/
 install/
 log/
 .vscode/
+
+# Generated experiment data — large, frequently written, causes git object
+# corruption on power-cycled Jetson. Back up with rsync instead.
+src/parking/results/*.csv
+src/parking/results/**/*.csv
+src/parking/results/images/
+src/parking/results/cmd_vel/
+src/parking/results/velocity_control/
+src/parking/results/nav_metrics/
+src/parking/results/mppi_tests/
+src/parking/results/pose_estimation/

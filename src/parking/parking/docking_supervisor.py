@@ -748,16 +748,16 @@ class DockingSupervisor(Node):
             self._last_servo_marker_x = p.x
             self._last_servo_marker_z = p.z
             q = msg.pose.orientation
-            _, _, self._last_servo_marker_yaw = tft.euler_from_quaternion(
-                [q.x, q.y, q.z, q.w])
-            self._last_servo_detection_time = time.time()
-            self._last_servo_tag_odom = self._marker_cam_to_odom(p)
+            qx, qy, qz, qw = q.x, q.y, q.z, q.w
 
             # Compute the dock's true approach direction from the tag's Z-axis.
             # Tag Z in camera_optical (rotate [0,0,1] by quaternion):
-            qx, qy, qz, qw = q.x, q.y, q.z, q.w
             z_cam_x = 2.0 * (qx * qz + qy * qw)
             z_cam_z = 1.0 - 2.0 * (qx * qx + qy * qy)
+            # Heading error: signed angle from camera +Z to tag normal in XZ plane.
+            self._last_servo_marker_yaw = math.atan2(z_cam_x, z_cam_z)
+            self._last_servo_detection_time = time.time()
+            self._last_servo_tag_odom = self._marker_cam_to_odom(p)
             # Transform to base_link (cam_z→base_x, -cam_x→base_y):
             z_base_x =  z_cam_z
             z_base_y = -z_cam_x

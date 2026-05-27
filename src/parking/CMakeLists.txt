@@ -164,6 +164,12 @@ install(PROGRAMS
   DESTINATION lib/${PROJECT_NAME}
   RENAME reset_mission
 )
+
+install(PROGRAMS
+  parking/manual_data_logger.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME manual_data_logger
+)
 # =========================================================
 # 5. Install Launch and Config files
 # =========================================================

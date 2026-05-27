@@ -3,7 +3,7 @@ lifecycle_manager:
     use_sim_time: false
     autostart: true
     node_names: ['controller_server', 'planner_server', 'behavior_server', 'bt_navigator', 'waypoint_follower', 'velocity_smoother']
-    bond_timeout: 30.0  # <--- INCREASE THIS to 15.0
+    bond_timeout: 30.0
 
 bt_navigator:
   ros__parameters:
@@ -16,7 +16,6 @@ bt_navigator:
     enable_groot_monitoring: True
     groot_zmq_publisher_port: 1666
     groot_zmq_server_port: 1667
-    #default_nav_to_pose_bt_xml: "/opt/ros/humble/share/nav2_bt_navigator/behavior_trees/navigate_to_pose_w_replanning_and_recovery.xml"
     default_nav_to_pose_bt_xml: "/home/blueeagle/ros2_ws/src/parking/config/follow_dynamic.xml"
     default_nav_through_poses_bt_xml: "/opt/ros/humble/share/nav2_bt_navigator/behavior_trees/navigate_through_poses_w_replanning_and_recovery.xml"
     plugin_lib_names:
@@ -71,122 +70,81 @@ bt_navigator:
       - nav2_truncate_path_local_action_bt_node
       - nav2_wait_action_bt_node
       - nav2_wait_cancel_bt_node
-      
+
 
 controller_server:
   ros__parameters:
     use_sim_time: False
-    controller_frequency: 10.0  # was 20 — at 20 Hz each MPPI solve has only 50 ms;
-                                # 1000 batches × 50 steps can exceed that on Jetson,
-                                # causing stale commands and sluggish behaviour
+    controller_frequency: 10.0
     min_x_velocity_threshold: 0.001
     min_y_velocity_threshold: 0.001
     min_theta_velocity_threshold: 0.001
     failure_tolerance: 0.3
     progress_checker_plugin: "progress_checker"
-    goal_checker_plugins: ["general_goal_checker"] 
+    goal_checker_plugins: ["general_goal_checker"]
     controller_plugins: ["FollowPath"]
 
     progress_checker:
       plugin: "nav2_controller::SimpleProgressChecker"
       required_movement_radius: 0.05
-      movement_time_allowance: 10.0
+      movement_time_allowance: 15.0
 
     general_goal_checker:
       stateful: True
       plugin: "nav2_controller::SimpleGoalChecker"
-      xy_goal_tolerance: 0.1
-      yaw_goal_tolerance: 0.3
+      xy_goal_tolerance: 0.05
+      yaw_goal_tolerance: 0.2
 
     FollowPath:
-      plugin: "nav2_mppi_controller::MPPIController"
+      plugin: "nav2_regulated_pure_pursuit_controller::RegulatedPurePursuitController"
+
+      # ── Speed ────────────────────────────────────────────────────────────────
+      desired_linear_vel: 0.3
+      min_approach_linear_velocity: 0.05
+      approach_velocity_scaling_dist: 0.6
+
+      # ── Lookahead ────────────────────────────────────────────────────────────
+      lookahead_dist: 0.4
+      min_lookahead_dist: 0.2
+      max_lookahead_dist: 0.8
+      use_velocity_scaled_lookahead_dist: true
+
+      # ── Regulated velocity scaling ────────────────────────────────────────────
+      regulated_linear_velocity_scaling: true
+      regulated_rotation_scaling: true
+      use_cost_regulated_linear_velocity_scaling: false
+
+      # ── Collision / "Blindfold" ───────────────────────────────────────────────
+      # CRITICAL: RPP will NOT abort when the local costmap shows the dock as an
+      # obstacle during the final approach.  Visual servo takes over before contact.
+      use_collision_detection: false
+      max_allowed_time_to_collision_up_to_carrot: 1.0
+
+      # ── Rotation to heading ───────────────────────────────────────────────────
+      use_rotate_to_heading: true
+      allow_reversing: false
+      rotate_to_heading_min_angle: 0.785
+      rotate_to_heading_angular_vel: 2.0
+
+      # ── Dynamics ─────────────────────────────────────────────────────────────
+      max_angular_accel: 3.2
+      max_lateral_accel: 0.0
       transform_tolerance: 0.5
-      time_steps: 50               # 50 × 0.1 s = 5.0 s planning horizon
-      trajectory_point_step: 1
-      model_dt: 0.1                # must equal 1/controller_frequency
-      publish_optimal_trajectory: True
-      visualize: False
-      batch_size: 700
-      use_sim_time: False
-      gamma: 0.015
-      iteration_count: 2
-      prune_distance: 0.3
-      use_unordered_multithreading: true
-      regenerate_noises: false
-
-      motion_model: "DiffDrive"    # skid-steer: vx and wz are fully decoupled
-      temperature: 0.20
-
-      # ── Velocity limits ──────────────────────────────────────────────────────
-      vx_max: 0.5
-      vx_min: 0.0                  # forward-only; no reversing
-      wz_max: 5.0                  # DiffDrive can spin freely — high ceiling for aggressive evasion arcs
-      vy_std: 0.0                  # skid-steer has no lateral slip degree of freedom
-      vx_std: 0.2                  # smooth forward variance
-      wz_std: 0.8                  # wide search — actively samples aggressive turning arcs
-
-      # ── Critics ─────────────────────────────────────────────────────────────
-      critics: ["ObstaclesCritic",
-                "PathFollowCritic", "PathAlignCritic",
-                "GoalCritic", "GoalAngleCritic",
-                "PreferForwardCritic"]
-
-      ObstaclesCritic:
-        enabled: true
-        cost_power: 1
-        repulsion_weight: 2.5     # reduced — gentler gradient in tight dock approach area
-        critical_weight: 10.0     # was 25 — dominated all other critics; robot froze near dock wall
-        near_goal_distance: 0.3   # relax obstacle penalty inside 0.3 m of goal (final approach)
-        consider_footprint: false  # was true — footprint check too aggressive in dock area; center-point sufficient
-
-      PathFollowCritic:
-        enabled: true
-        cost_power: 2
-        cost_weight: 10.0
-        offset_from_furthest: 3    # carrot 3 steps (0.3 s) ahead — stable heading reference
-        threshold_to_consider: 0.3 # was 1.5 — disabled within 1.5 m; with short dock approach goals
-                                   # PathFollowCritic was NEVER active → dead zone; now stays on until 0.3 m
-
-      PathAlignCritic:
-        enabled: true
-        cost_power: 1
-        cost_weight: 3.0          # was 5.0 — reduced to avoid fighting forward motion
-        max_path_occupancy_ratio: 0.5
-        threshold_to_consider: 0.3 # was 1.5 — same dead-zone fix as PathFollowCritic
-        use_path_orientation: true
-
-      GoalCritic:
-        enabled: true
-        cost_power: 1
-        cost_weight: 10.0
-        threshold_to_consider: 0.3 # was 0.2 — activate goal homing slightly earlier
-
-      GoalAngleCritic:
-        enabled: true
-        cost_power: 1
-        cost_weight: 8.0          # was 20.0 — was fighting PreferForwardCritic; robot couldn't move
-        threshold_to_consider: 0.3
-
-      PreferForwardCritic:
-        enabled: true
-        cost_power: 1
-        cost_weight: 8.0          # was 5.0 — raised to overcome reduced obstacle weight
-        threshold_to_consider: 0.5
 
 
 local_costmap:
   local_costmap:
     ros__parameters:
-      update_frequency: 10.0      # was 5.0 — must track a walking human (~1 m/s) at 0.1 m steps
-      publish_frequency: 5.0      # was 2.0 — kept at half update rate for RViz/MPPI consumers
+      update_frequency: 10.0
+      publish_frequency: 5.0
       transform_tolerance: 0.8
       always_send_full_costmap: False
       global_frame: odom
       robot_base_frame: base_link
       use_sim_time: False
       rolling_window: true
-      width: 4                    # was 2 — 4 m gives MPPI 2 m of clearance on each side to plan arcs
-      height: 4                   # was 2 — MPPI time horizon at 0.35 m/s sweeps ~1.5 m; 4 m is safe
+      width: 4
+      height: 4
       resolution: 0.02
       footprint: "[[-0.097, -0.084], [-0.097, 0.084], [0.097, 0.084], [0.097, -0.084]]"
       plugins: ["obstacle_layer", "inflation_layer"]
@@ -205,9 +163,8 @@ local_costmap:
           inf_is_valid: true
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        inflation_radius: 0.25    # was 0.04 — must exceed robot half-footprint (0.097 m) plus margin
-        cost_scaling_factor: 10.0  # low value = gentle exponential decay; MPPI ObstaclesCritic
-                                  # "feels" the gradient across the full 0.25 m and steers early
+        inflation_radius: 0.25
+        cost_scaling_factor: 10.0
 
 
 global_costmap:
@@ -219,28 +176,38 @@ global_costmap:
       robot_base_frame: base_link
       use_sim_time: False
       always_send_full_costmap: False
-      rolling_window: false       # was true — global costmap must cover the entire static map,
-                                  # not a 5x5 m window; map bounds come from map_server
-      # width/height intentionally absent: derived from static map when rolling_window is false
+      rolling_window: false
       footprint: "[[-0.097, -0.084], [-0.097, 0.084], [0.097, 0.084], [0.097, -0.084]]"
       transform_tolerance: 1.2
       resolution: 0.03
       track_unknown_space: true
-      plugins: ["static_layer", "inflation_layer"]   # obstacle_layer intentionally absent:
-                                                      # global costmap is static-only so the global
-                                                      # planner plots through dynamic obstacles,
-                                                      # isolating MPPI for evasion tests
+      # obstacle_layer: global planner sees the box and prefers to route around it
+      # during commute.  High cost_scaling_factor creates a soft gradient (not a
+      # hard wall) so the RPP blindfold can still complete the final approach.
+      plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
       static_layer:
         plugin: "nav2_costmap_2d::StaticLayer"
         map_subscribe_transient_local: True
         map_topic: "/map"
         subscribe_to_updates: true
         track_unknown_space: true
+      obstacle_layer:
+        plugin: "nav2_costmap_2d::ObstacleLayer"
+        observation_sources: scan
+        enabled: True
+        scan:
+          topic: /scan
+          max_obstacle_height: 2.0
+          clearing: True
+          marking: True
+          data_type: "LaserScan"
+          raytrace_max_range: 3.0
+          obstacle_max_range: 2.5
+          inf_is_valid: true
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        inflation_radius: 0.30    # was 0.04 — consistent with local costmap
-        cost_scaling_factor: 3.5  # slightly steeper than local; global planner benefits from
-                                  # crisper cost boundaries around static walls
+        inflation_radius: 0.5
+        cost_scaling_factor: 15.0
 
 
 planner_server:
@@ -249,35 +216,33 @@ planner_server:
     use_sim_time: False
     planner_plugins: ["GridBased"]
     GridBased:
-      plugin: "nav2_smac_planner/SmacPlannerHybrid"  # <--- The "Car-Like" Planner
+      plugin: "nav2_smac_planner/SmacPlannerHybrid"
       downsample_costmap: false
       downsampling_factor: 1
-      tolerance: 0.3       # snap to nearest free cell if exact goal is in/near an obstacle
+      tolerance: 0.3
       use_final_approach_orientation: true
       allow_unknown: true
       max_iterations: 1000000
       max_on_approach_iterations: 1000
       max_planning_time: 3.0
-      motion_model_for_search: "DUBIN" # <--- "DUBIN" = Forward Only (No Reversing)
-      non_straight_penalty: 1.2        # (Was 1.2) Punish turning
-      cost_travel_multiplier: 5.0     # (Was 2.0) Punish long paths (loops are long)
-      change_penalty: 10.0              # Punish changing from straight to turn
+      motion_model_for_search: "DUBIN"
+      non_straight_penalty: 1.2
+      cost_travel_multiplier: 5.0
+      change_penalty: 10.0
       retrospective_penalty: 0.0
-      analytic_expansion_ratio: 3.5 
+      analytic_expansion_ratio: 3.5
       analytic_expansion_max_length: 2.5
       angle_quantization_bins: 144
-      minimum_turning_radius: 0.3     # hard kinematic limit: robot cannot turn tighter than 0.2 m
+      minimum_turning_radius: 0.3
       reverse_penalty: 5.0
-      
-      
-      
+
 
 behavior_server:
   ros__parameters:
     costmap_topic: local_costmap/costmap_raw
     footprint_topic: local_costmap/published_footprint
     cycle_frequency: 5.0
-    recovery_plugins: ["backup", "wait"]   # spin removed: impossible with 0.3 m min turning radius
+    recovery_plugins: ["backup", "wait"]
     backup:
       plugin: "nav2_behaviors/BackUp"
     wait:
@@ -298,16 +263,16 @@ robot_state_publisher:
 velocity_smoother:
   ros__parameters:
     use_sim_time: False
-    smoothing_frequency: 10.0       # match controller_frequency
+    smoothing_frequency: 10.0
     scale_velocities: true
     feedback: "OPEN_LOOP"
-    max_velocity: [0.5, 0.0, 5.0]  # [vx, vy, wz] — wz ceiling = vx_max/min_turning_r = 0.5/0.2
-    min_velocity: [0.0,  0.0, -5.0] # no reversing
-    max_accel:    [2.0,  0.0, 2.2]
+    max_velocity: [0.5, 0.0, 5.0]
+    min_velocity: [0.0, 0.0, -5.0]
+    max_accel:    [2.0, 0.0, 2.2]
     max_decel:    [-2.5, 0.0, -2.2]
     odom_topic: "/odom"
     odom_duration: 0.1
-    deadband_velocity: [0.01, 0.0, 0.0]  # no wz deadband — MPPI corrections must reach wheels unfiltered
+    deadband_velocity: [0.01, 0.0, 0.0]
     velocity_timeout: 1.0
 
 waypoint_follower:
@@ -321,38 +286,29 @@ waypoint_follower:
       waypoint_pause_duration: 200
 
 # =============================================================================
-# AMCL — tuned for skid-steer (high alpha1/alpha2 = distrust encoder yaw)
+# AMCL
 # =============================================================================
 amcl:
   ros__parameters:
     use_sim_time: False
     robot_model_type: "nav2_amcl::DifferentialMotionModel"
-
-    # ── Odometry noise model ────────────────────────────────────────────────
-    # Skid-steer relies on wheel slip to rotate → encoder yaw is unreliable.
-    # High alpha1/alpha2 tells the particle filter to spread heavily during
-    # rotation so LiDAR scan-matching (not dead-reckoning) corrects heading.
-    alpha1: 0.8   # rotation noise FROM rotation   (dominant source of skid-steer error)
-    alpha2: 0.8   # rotation noise FROM translation (slip coupling during straight travel)
-    alpha3: 0.2   # translation noise FROM translation (encoders reliable for fwd motion)
-    alpha4: 0.4   # translation noise FROM rotation   (some slip during turns)
-
-    # ── Particle filter ─────────────────────────────────────────────────────
+    alpha1: 0.8
+    alpha2: 0.8
+    alpha3: 0.2
+    alpha4: 0.4
     min_particles: 500
     max_particles: 3000
     pf_err: 0.05
     pf_z: 0.99
     resample_interval: 1
-    update_min_d: 0.1    # re-weight after 0.1 m forward motion
-    update_min_a: 0.1    # re-weight after ~6° rotation
+    update_min_d: 0.1
+    update_min_a: 0.1
     recovery_alpha_fast: 0.0
     recovery_alpha_slow: 0.0
-
-    # ── Laser model ─────────────────────────────────────────────────────────
     scan_topic: /scan
     laser_model_type: "likelihood_field"
     max_beams: 60
-    laser_min_range: -1.0    # -1 = use sensor default minimum
+    laser_min_range: -1.0
     laser_max_range: 12.0
     laser_likelihood_max_dist: 2.0
     sigma_hit: 0.2
@@ -365,19 +321,13 @@ amcl:
     beam_skip_distance: 0.5
     beam_skip_error_threshold: 0.9
     beam_skip_threshold: 0.3
-
-    # ── Frames & TF ─────────────────────────────────────────────────────────
     global_frame_id: "map"
     odom_frame_id: "odom"
     base_frame_id: "base_link"
-    tf_broadcast: true          # AMCL publishes map→odom TF
+    tf_broadcast: true
     transform_tolerance: 0.5
-
-    # ── Pose save / initial pose ─────────────────────────────────────────────
     save_pose_rate: 0.5
-    set_initial_pose: true      # seed particles at (0,0,0) on startup so map→odom TF
-                                # exists immediately, allowing Nav2 to activate.
-                                # Correct the pose with RViz "2D Pose Estimate" or teleop.
+    set_initial_pose: true
     initial_pose_x: 0.0
     initial_pose_y: 0.0
     initial_pose_a: 0.0

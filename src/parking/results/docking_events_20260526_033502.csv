@@ -1,0 +1,60 @@
+timestamp_iso,event_type,description,value
+2026-05-26T03:35:02.165835,NODE_START,DockingSupervisor (RPP + Visual Servo) initialised,
+2026-05-26T03:35:14.014419,GOAL_POSE,RViz zone goal received,"(0.29,-0.01)"
+2026-05-26T03:35:14.024733,GOAL_ACCEPTED,Nav2 goal accepted,
+2026-05-26T03:35:14.048707,STATE_CHANGE,Transitioned to VISUAL_SERVO_DOCK,marker3_dist=0.576
+2026-05-26T03:35:16.967684,BLIND_APPROACH,Tag lost at close range — blind handoff,last_z=0.361 est_z=0.248 tag_age=0.57
+2026-05-26T03:35:17.275744,MISSION_SUCCESS,Blind approach: standoff reached,traveled=0.050 target=0.048
+2026-05-26T03:35:58.813765,RESET,Mission reset — returned to IDLE,
+2026-05-26T03:35:58.816283,GOAL_POSE,RViz zone goal received,"(0.44,-0.02)"
+2026-05-26T03:35:58.821597,GOAL_ACCEPTED,Nav2 goal accepted,
+2026-05-26T03:35:58.877743,STATE_CHANGE,Transitioned to VISUAL_SERVO_DOCK,marker3_dist=0.645
+2026-05-26T03:36:01.865383,BLIND_APPROACH,Tag lost at close range — blind handoff,last_z=0.412 est_z=0.306 tag_age=0.53
+2026-05-26T03:36:02.367628,MISSION_SUCCESS,Blind approach: standoff reached,traveled=0.087 target=0.086
+2026-05-26T03:36:48.211716,RESET,Mission reset — returned to IDLE,
+2026-05-26T03:36:48.215024,GOAL_POSE,RViz zone goal received,"(0.38,-0.41)"
+2026-05-26T03:36:48.222330,GOAL_ACCEPTED,Nav2 goal accepted,
+2026-05-26T03:36:48.282413,STATE_CHANGE,Transitioned to VISUAL_SERVO_DOCK,marker3_dist=0.650
+2026-05-26T03:36:50.668128,BLIND_APPROACH,Tag lost at close range — blind handoff,last_z=0.367 est_z=0.259 tag_age=0.54
+2026-05-26T03:36:50.973942,MISSION_SUCCESS,Blind approach: standoff reached,traveled=0.048 target=0.039
+2026-05-26T03:37:21.968334,RESET,Mission reset — returned to IDLE,
+2026-05-26T03:37:21.976296,GOAL_POSE,RViz zone goal received,"(0.17,-0.36)"
+2026-05-26T03:37:21.985671,GOAL_ACCEPTED,Nav2 goal accepted,
+2026-05-26T03:37:22.033820,STATE_CHANGE,Transitioned to VISUAL_SERVO_DOCK,marker3_dist=0.660
+2026-05-26T03:37:24.767771,BLIND_APPROACH,Tag lost at close range — blind handoff,last_z=0.463 est_z=0.344 tag_age=0.60
+2026-05-26T03:37:25.572480,MISSION_SUCCESS,Blind approach: standoff reached,traveled=0.159 target=0.144
+2026-05-26T03:37:58.848160,RESET,Mission reset — returned to IDLE,
+2026-05-26T03:37:58.856739,GOAL_POSE,RViz zone goal received,"(-0.21,-0.27)"
+2026-05-26T03:37:58.863822,GOAL_ACCEPTED,Nav2 goal accepted,
+2026-05-26T03:37:59.012538,STATE_CHANGE,Transitioned to VISUAL_SERVO_DOCK,marker3_dist=0.579
+2026-05-26T03:38:00.670251,BLIND_APPROACH,Handoff to dead-reckoning,marker_z=0.310 target=0.150
+2026-05-26T03:38:01.469157,MISSION_SUCCESS,Blind approach: standoff reached,traveled=0.151 target=0.150
+2026-05-26T03:40:16.323845,RESET,Mission reset — returned to IDLE,
+2026-05-26T03:40:16.333125,GOAL_POSE,RViz zone goal received,"(-0.10,-0.15)"
+2026-05-26T03:40:16.339194,GOAL_ACCEPTED,Nav2 goal accepted,
+2026-05-26T03:40:16.441668,STATE_CHANGE,Transitioned to VISUAL_SERVO_DOCK,marker3_dist=0.596
+2026-05-26T03:40:18.467653,BLIND_APPROACH,Handoff to dead-reckoning,marker_z=0.344 target=0.150
+2026-05-26T03:40:19.267124,MISSION_SUCCESS,Blind approach: standoff reached,traveled=0.152 target=0.150
+2026-05-26T03:41:01.545652,RESET,Mission reset — returned to IDLE,
+2026-05-26T03:41:01.553017,GOAL_POSE,RViz zone goal received,"(-0.02,-0.20)"
+2026-05-26T03:41:01.556727,GOAL_ACCEPTED,Nav2 goal accepted,
+2026-05-26T03:41:01.646999,STATE_CHANGE,Transitioned to VISUAL_SERVO_DOCK,marker3_dist=0.608
+2026-05-26T03:41:03.766227,BLIND_APPROACH,Tag lost at close range — blind handoff,last_z=0.395 est_z=0.287 tag_age=0.54
+2026-05-26T03:41:04.171723,MISSION_SUCCESS,Blind approach: standoff reached,traveled=0.089 target=0.087
+2026-05-26T03:49:54.939776,RESET,Mission reset — returned to IDLE,
+2026-05-26T03:49:54.941945,GOAL_POSE,RViz zone goal received,"(-0.03,-0.36)"
+2026-05-26T03:49:54.948650,GOAL_ACCEPTED,Nav2 goal accepted,
+2026-05-26T03:49:55.049207,STATE_CHANGE,Transitioned to VISUAL_SERVO_DOCK,marker3_dist=0.665
+2026-05-26T03:49:58.867062,SAFETY_ABORT,Visual servo: marker lost >2 s,
+2026-05-26T03:50:38.739610,RESET,Mission reset — returned to IDLE,
+2026-05-26T03:50:38.741206,GOAL_POSE,RViz zone goal received,"(-0.24,-0.20)"
+2026-05-26T03:50:38.749099,GOAL_ACCEPTED,Nav2 goal accepted,
+2026-05-26T03:50:38.796959,STATE_CHANGE,Transitioned to VISUAL_SERVO_DOCK,marker3_dist=0.651
+2026-05-26T03:50:41.073128,BLIND_APPROACH,Tag lost at close range — blind handoff,last_z=0.417 est_z=0.313 tag_age=0.52
+2026-05-26T03:50:41.671587,MISSION_SUCCESS,Blind approach: standoff reached,traveled=0.117 target=0.113
+2026-05-26T03:51:00.840408,RESET,Mission reset — returned to IDLE,
+2026-05-26T03:51:00.842099,GOAL_POSE,RViz zone goal received,"(-0.47,-0.03)"
+2026-05-26T03:51:00.847288,GOAL_ACCEPTED,Nav2 goal accepted,
+2026-05-26T03:51:00.854546,STATE_CHANGE,Transitioned to VISUAL_SERVO_DOCK,marker3_dist=0.652
+2026-05-26T03:51:03.569281,BLIND_APPROACH,Tag lost at close range — blind handoff,last_z=0.397 est_z=0.279 tag_age=0.59
+2026-05-26T03:51:03.966863,MISSION_SUCCESS,Blind approach: standoff reached,traveled=0.082 target=0.079

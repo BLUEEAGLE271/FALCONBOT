@@ -38,6 +38,7 @@ setup(
             'cmd_vel_plotter = parking.cmd_vel_plotter:main',
             'docking_supervisor = parking.docking_supervisor:main',
             'reset_mission = parking.reset_mission:main',
+            'manual_data_logger = parking.manual_data_logger:main',
         ],
     },
 )

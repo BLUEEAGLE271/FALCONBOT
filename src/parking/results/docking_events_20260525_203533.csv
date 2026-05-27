@@ -1,0 +1,9 @@
+timestamp_iso,event_type,description,value
+2026-05-25T20:35:33.433975,NODE_START,DockingSupervisor (RPP + Visual Servo) initialised,
+2026-05-25T20:36:08.558867,GOAL_POSE,RViz zone goal received,"(2.11,1.87)"
+2026-05-25T20:36:08.569815,GOAL_ACCEPTED,Nav2 goal accepted,
+2026-05-25T20:36:12.562128,STATE_CHANGE,Transitioned to VISUAL_HOMING,marker3_dist=1.200
+2026-05-25T20:36:12.566283,GOAL_SENT,Visual homing nav goal sent,"standoff=(0.927,0.189)"
+2026-05-25T20:36:12.583348,GOAL_ACCEPTED,Nav2 goal accepted,
+2026-05-25T20:36:14.722297,STATE_CHANGE,Transitioned to VISUAL_SERVO_DOCK,marker3_dist=0.840
+2026-05-25T20:36:28.136450,SAFETY_ABORT,Visual servo: marker lost >2 s,

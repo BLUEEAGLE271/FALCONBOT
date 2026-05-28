@@ -518,88 +518,57 @@ class DockingSupervisor(Node):
             self._cmd_pub.publish(twist)
             return
 
-        # ── Camera-frame pure-pursuit servo ──────────────────────────────────
-        # All geometry in camera_optical XZ plane (X = right, Z = forward).
-        # Robot/camera sits at the origin (0, 0).
-        #
-        # d   = (Xt, Zt)  — vector from camera to tag
-        # Z3t = (z3t_hat_x, z3t_hat_z) — tag Z-axis in camera XZ (points INTO dock)
-        #
-        # ThetaT: signed angle from Z3t to d.
-        #   Negative → tag is left of camera centre → robot is RIGHT of centreline.
-        #   Positive → tag is right of camera centre → robot is LEFT  of centreline.
-        #
-        # lat_err = |d| · sin(ThetaT)
-        #   This is the perpendicular distance from the origin to the Z3t line.
-        #   (sin gives the perpendicular component; cos gives the along-track component.)
-        #
-        # Carrot = foot-of-perpendicular from origin to Z3t line + lookahead · Z3t_hat
-        #   The foot is the closest point on the centreline to the robot.
-        #   Adding lookahead along Z3t places the carrot ahead of that foot toward dock.
-        #
-        # heading_err: bearing from camera +Z to carrot, CCW positive.
-        #   Positive → carrot is to the LEFT → turn left (positive wz). ✓
-        #
-        # vx is reduced by cos(heading_err) so the robot slows when heavily off-angle,
-        # giving the steering more time to converge before closing distance.
+        # ── Odom-frame pure-pursuit servo ────────────────────────────────────
+        # Centerline = marker-3 Z-axis (dock face normal) projected into odom.
+        # Both the tag position and the Z3t direction are frozen at the first
+        # servo tick so subsequent detections cannot shift the line mid-run.
+        # Only the robot's odom position (rx,ry) updates each tick, which is
+        # what makes the carrot advance and gives a real non-zero lat_err.
 
-        # snapshot (guard against concurrent _on_any_marker update)
-        Xt = self._last_servo_marker_x    # cam_x  (right = positive)
-        Zt = self._last_servo_marker_z    # cam_z  (forward = positive)
-        z_base_ax, z_base_ay = self._last_servo_z_base
-        # recover camera-frame components stored in base_link convention:
-        #   _last_servo_z_base = (z_cam_z, -z_cam_x)
-        z3t_raw_x = -z_base_ay           # z_cam_x = -z_base_y
-        z3t_raw_z =  z_base_ax           # z_cam_z =  z_base_x
+        rx, ry, ryaw = self._last_odom_pose
 
-        d_mag = math.hypot(Xt, Zt)
+        # freeze tag odom at first tick
+        if self._servo_tag_odom_frozen is None:
+            self._servo_tag_odom_frozen = self._last_servo_tag_odom
+            self.get_logger().info(
+                f'[SERVO] Tag odom frozen: '
+                f'({self._servo_tag_odom_frozen[0]:.3f}, {self._servo_tag_odom_frozen[1]:.3f})'
+            )
 
-        # normalise Z3t; flip if it points away from dock (opposite to d)
-        z3t_norm = math.hypot(z3t_raw_x, z3t_raw_z)
-        if z3t_norm < 1e-6:
-            z3t_norm = 1.0
-        z3t_hat_x = z3t_raw_x / z3t_norm
-        z3t_hat_z = z3t_raw_z / z3t_norm
-        if z3t_hat_x * Xt + z3t_hat_z * Zt < 0.0:
-            z3t_hat_x = -z3t_hat_x
-            z3t_hat_z = -z3t_hat_z
+        # freeze Z3t approach direction (dock face normal in odom) at first tick
+        approach_yaw = self._servo_approach_yaw
+        if approach_yaw is None:
+            approach_yaw             = self._last_servo_dock_yaw
+            self._servo_approach_yaw = approach_yaw
+            self.get_logger().info(
+                f'[SERVO] Approach yaw frozen (Z3t odom): {math.degrees(approach_yaw):.1f}°'
+            )
 
-        # ThetaT: signed angle from Z3t to d
-        #   cross = Xt·z3t_z − Zt·z3t_x  (positive when d is CCW / left of Z3t)
-        #   dot   = Xt·z3t_x + Zt·z3t_z
-        theta_t = math.atan2(
-            Xt * z3t_hat_z - Zt * z3t_hat_x,
-            Xt * z3t_hat_x + Zt * z3t_hat_z,
-        )
+        tag_ox, tag_oy = self._servo_tag_odom_frozen
+        approach_ax    = math.cos(approach_yaw)
+        approach_ay    = math.sin(approach_yaw)
 
-        # lateral error: perpendicular distance from origin to Z3t centreline
-        lat_err = d_mag * math.sin(theta_t)   # + = robot left, − = robot right
+        dx      = rx - tag_ox
+        dy      = ry - tag_oy
+        t_robot = dx * approach_ax + dy * approach_ay    # < 0 on approach side
+        lat_err = -dx * approach_ay + dy * approach_ax   # signed lateral error
 
-        # foot-of-perpendicular from origin onto Z3t line
-        t_proj    = -(Xt * z3t_hat_x + Zt * z3t_hat_z)
-        foot_cam_x = Xt + t_proj * z3t_hat_x
-        foot_cam_z = Zt + t_proj * z3t_hat_z
-
-        # carrot: foot + lookahead distance along Z3t toward dock
-        carrot_cam_x = foot_cam_x + self.lookahead_dist * z3t_hat_x
-        carrot_cam_z = foot_cam_z + self.lookahead_dist * z3t_hat_z
-        if carrot_cam_z < 0.02:          # safety: keep carrot in front of robot
-            carrot_cam_z = 0.02
-
-        L_carrot = math.hypot(carrot_cam_x, carrot_cam_z)
-
-        # heading error: CCW angle from camera +Z to carrot (positive = turn left)
-        heading_err = math.atan2(-carrot_cam_x, carrot_cam_z)
+        t_carrot        = min(-self.target_standoff, t_robot + self.lookahead_dist)
+        carrot_ox       = tag_ox + t_carrot * approach_ax
+        carrot_oy       = tag_oy + t_carrot * approach_ay
+        L_carrot        = math.hypot(carrot_ox - rx, carrot_oy - ry)
+        angle_to_carrot = math.atan2(carrot_oy - ry, carrot_ox - rx)
+        heading_error   = _wrap_pi(angle_to_carrot - ryaw)
 
         # reduce forward speed when heavily off-angle; never below 0.05 m/s
-        heading_factor = max(0.0, math.cos(heading_err))
+        heading_factor = max(0.0, math.cos(heading_error))
         vx_cmd = max(0.05, self.v_linear * heading_factor)
 
-        wz_prop = (self.k_steer * vx_cmd * 2.0 * math.sin(heading_err) / L_carrot
+        wz_prop = (self.k_steer * vx_cmd * 2.0 * math.sin(heading_error) / L_carrot
                    if L_carrot > 0.02 else 0.0)
 
         wz_deadband = wz_prop
-        if abs(heading_err) > 0.02:
+        if abs(heading_error) > 0.02:
             if 0.0 < wz_deadband < self.friction_deadband:
                 wz_deadband = self.friction_deadband
             elif -self.friction_deadband < wz_deadband < 0.0:
@@ -613,33 +582,23 @@ class DockingSupervisor(Node):
         twist.linear.x  = vx_cmd
         twist.angular.z = wz_cmd
 
-        t_carrot_along = t_proj + self.lookahead_dist
         self.get_logger().info(
             f'[SERVO] '
-            f'd=({Xt:.3f},{Zt:.3f})m '
-            f'Z3t=({z3t_hat_x:.3f},{z3t_hat_z:.3f}) '
-            f'θT={math.degrees(theta_t):.1f}° '
             f'lat={lat_err:.3f}m '
-            f't_robot={t_proj:.3f}m '
-            f't_carrot={t_carrot_along:.3f}m '
-            f'hdg={math.degrees(heading_err):.1f}° '
-            f'carrot=({carrot_cam_x:.3f},{carrot_cam_z:.3f})m '
-            f'wz={wz_cmd:.2f}'
+            f't={t_robot:.3f}m '
+            f't_carrot={t_carrot:.3f}m '
+            f'hdg={math.degrees(heading_error):.1f}° '
+            f'wz={wz_cmd:.2f} '
+            f'cam_x={marker_x:.3f}'
         )
-
-        rx, ry, ryaw = self._last_odom_pose
         self._log_servo_tick(
             phase='SERVO',
-            cam_tag_x=Xt, cam_tag_z=Zt,
+            cam_tag_x=marker_x, cam_tag_z=marker_z,
             rx=rx, ry=ry, ryaw=ryaw,
-            tag_ox=z3t_hat_x, tag_oy=z3t_hat_z,            # Z3t unit vector (repurposed)
-            dock_yaw=theta_t,                                # ThetaT in rad  (repurposed)
-            t_robot=t_proj,                                  # foot along-track from tag
-            lat_err=lat_err,
-            t_carrot=t_proj + self.lookahead_dist,
-            carrot_ox=carrot_cam_x, carrot_oy=carrot_cam_z, # camera frame   (repurposed)
-            angle_to_carrot=math.atan2(carrot_cam_x, carrot_cam_z),
-            heading_error=heading_err,
+            tag_ox=tag_ox, tag_oy=tag_oy, dock_yaw=approach_yaw,
+            t_robot=t_robot, lat_err=lat_err,
+            t_carrot=t_carrot, carrot_ox=carrot_ox, carrot_oy=carrot_oy,
+            angle_to_carrot=angle_to_carrot, heading_error=heading_error,
             wz_prop=wz_prop, wz_deadband=wz_deadband, wz_cmd=wz_cmd,
             vx_cmd=vx_cmd,
         )
@@ -804,9 +763,12 @@ class DockingSupervisor(Node):
             z_base_x =  z_cam_z
             z_base_y = -z_cam_x
             self._last_servo_z_base = (z_base_x, z_base_y)  # approach dir in base_link
-            # Rotate to odom frame using current robot yaw:
+            # Rotate Z3t to odom frame using current robot yaw:
             _, _, ryaw = self._last_odom_pose
-            self._last_servo_dock_yaw = self._last_servo_marker_yaw
+            self._last_servo_dock_yaw = math.atan2(
+                z_base_x * math.sin(ryaw) + z_base_y * math.cos(ryaw),
+                z_base_x * math.cos(ryaw) - z_base_y * math.sin(ryaw),
+            )
             self._last_servo_detection_time = time.time()
             self._last_servo_tag_odom = self._marker_cam_to_odom(p)
         action:    str   = ''

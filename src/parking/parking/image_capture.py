@@ -18,7 +18,7 @@ RESULTS_DIR = os.path.normpath(
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 DISTORT_SCALE = 1.5    # image 3 — barrel strength, try 1.2 – 3.0
-APPROACH_DIST = 0.9   # image 5 — standoff from box centre (metres)
+APPROACH_DIST = 0.5   # image 5 — standoff from box centre (metres)
 ARROW_ALPHA   = 0.90   # image 5 — arrow opacity: 0.0 invisible → 1.0 solid
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
